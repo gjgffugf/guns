@@ -187,6 +187,75 @@ for dp, dn, fn in os.walk(ROOT):
             if re.search(r'\bset_process_input\(', ln):
                 errors.append(f"{p}:{i} set_process_input 在 Godot 4 已移除")
 
+
+# ============================================================
+# export_presets.cfg 键名校验（键名写错 Godot 会静默用默认值）
+# ============================================================
+PRESET_FILE = os.path.join(ROOT, "export_presets.cfg")
+VALID_ANDROID_KEYS = {
+    "custom_template/debug", "custom_template/release",
+    "gradle_build/use_gradle_build", "gradle_build/export_format",
+    "gradle_build/min_sdk", "gradle_build/target_sdk",
+    "gradle_build/compress_native_libraries",
+    "gradle_build/android_source_template", "gradle_build/gradle_build_directory",
+    "package/unique_name", "package/name", "package/signed",
+    "package/app_category", "package/exclude_from_recent" "s",
+    "package/retain_data_on_uninstall", "package/show_as_launcher_app",
+    "package/show_in_android_tv", "package/show_in_app_library",
+    "package/version/name", "package/version/code",
+    "keystore/debug", "keystore/debug_user", "keystore/debug_password",
+    "keystore/release", "keystore/release_user", "keystore/release_password",
+    "screen/immersive_mode", "screen/orientation",
+    "screen/support_small", "screen/support_normal",
+    "screen/support_large", "screen/support_xlarge",
+    "graphics/opengl_debug",
+    "architectures/armeabi-v7a", "architectures/arm64-v8a",
+    "architectures/x86", "architectures/x86_64",
+    "apk_expansion/enable", "apk_expansion/SALT", "apk_expansion/public_key",
+    "command_line/extra_args",
+    "xr_features/xr_mode", "xr_features/hand_tracking",
+    "xr_features/hand_tracking_frequency", "xr_features/passthrough",
+    "xr_features/button_quantization",
+}
+# 常见写错的键名 -> 正确键名
+WRONG_KEYS = {
+    "package/unique_package_identifier": "package/unique_name",
+    "package/identifier": "package/unique_name",
+    "package/package_name": "package/unique_name",
+    "package/version_name": "package/version/name",
+    "package/version_code": "package/version/code",
+}
+if os.path.isfile(PRESET_FILE):
+    txt = open(PRESET_FILE, encoding="utf-8").read()
+    if txt.lstrip().startswith("#"):
+        errors.append("export_presets.cfg 里有 '#' 注释，Godot 的 cfg 只认 ';'，会导致解析失败")
+    for ln in txt.split("\n"):
+        t = ln.strip()
+        if t.startswith("#"):
+            errors.append(f"export_presets.cfg 含 '#' 注释行: {t[:40]}（Godot cfg 只认 ';'）")
+        if "=" not in t or t.startswith("["):
+            continue
+        key = t.split("=", 1)[0].strip()
+        if key in WRONG_KEYS:
+            errors.append(f"export_presets.cfg 键名 '{key}' 不存在，应为 '{WRONG_KEYS[key]}'")
+        elif key.startswith("permissions/") or key.startswith("xr_features/"):
+            continue
+        elif key.startswith("package/") or key.startswith("gradle_build/") \
+                or key.startswith("keystore/") or key.startswith("screen/") \
+                or key.startswith("architectures/") or key.startswith("apk_expansion/") \
+                or key.startswith("custom_template/") or key.startswith("graphics/") \
+                or key.startswith("command_line/"):
+            if key not in VALID_ANDROID_KEYS:
+                errors.append(f"export_presets.cfg 未知键 '{key}'（Godot 会忽略，改用默认值）")
+    # 包名必须存在且合法
+    m = re.search(r'^package/unique_name\s*=\s*"([^"]*)"', txt, re.M)
+    if not m or m.group(1) == "":
+        errors.append("export_presets.cfg 缺少 package/unique_name，"
+                      "Godot 会退化成 com.example.noname")
+    else:
+        print("包名:", m.group(1))
+
+
 print("=" * 60)
 for e in errors:
     print("ERR ", e)

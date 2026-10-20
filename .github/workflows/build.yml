@@ -100,15 +100,24 @@ jobs:
           echo "构建模板已安装:"
           ls android/build/
 
-      - name: 生成调试签名密钥
+      - name: 生成签名密钥（debug/release 共用）
         run: |
           set -euo pipefail
+          # Android APK 必须签名才能安装。Godot 的 release 导出不会回退到
+          # 编辑器里的 debug keystore，必须显式提供 release keystore。
+          # 密码只用字母数字，避免特殊字符导致 jarsigner 报错。
+          KS="${HOME}/breakbind.keystore"
           keytool -genkeypair -v \
-            -keystore "${HOME}/debug.keystore" \
-            -alias androiddebugkey \
-            -storepass android -keypass android \
+            -keystore "$KS" \
+            -alias breakbind \
+            -storepass breakbind -keypass breakbind \
             -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US"
+            -dname "CN=BreakBind,O=xfan,C=CN"
+          # 校验：别名和密码能对上就直接继续，对不上立刻失败，别等到最后
+          keytool -list -v -keystore "$KS" -alias breakbind -storepass breakbind \
+            | grep -q "Alias name: breakbind"
+          echo "KEYSTORE_PATH=$KS" >> "$GITHUB_ENV"
+          echo "keystore 就绪: $KS"
 
       - name: 写入编辑器配置（SDK / JDK / 签名）
         run: |
@@ -121,9 +130,9 @@ jobs:
 
           export/android/android_sdk_path = "${ANDROID_HOME}"
           export/android/java_sdk_path = "${JAVA_HOME}"
-          export/android/debug_keystore = "${HOME}/debug.keystore"
-          export/android/debug_keystore_user = "androiddebugkey"
-          export/android/debug_keystore_pass = "android"
+          export/android/debug_keystore = "${HOME}/breakbind.keystore"
+          export/android/debug_keystore_user = "breakbind"
+          export/android/debug_keystore_pass = "breakbind"
           export/android/shutdown_adb_on_exit = false
           EOF
           sed -i 's/^          //' "${HOME}/.config/godot/editor_settings-${GODOT_VERSION}.tres"
@@ -168,8 +177,10 @@ jobs:
           set -euo pipefail
           mkdir -p build
           godot --headless --import 2>&1 | tee build/import.log | tail -30
-          grep -iE "error|failed|script error" build/import.log && {
-            echo "::error::导入资源阶段有脚本错误，见 build/import.log"; exit 1; }
+          if grep -iE "error|failed|script error" build/import.log; then
+            echo "::error::导入资源阶段有脚本错误，见 build/import.log"
+            exit 1
+          fi
           echo "导入完成"
 
       - name: 导出 APK
@@ -180,6 +191,17 @@ jobs:
           BT="${{ github.event.inputs.build_type || 'release' }}"
           OUT="$PWD/build/breakbind-battlefield.apk"
           echo "构建类型: $BT   输出: $OUT"
+
+          # 必须用绝对路径；且 keystore 密码与 key 密码一致
+          export GODOT_ANDROID_KEYSTORE_RELEASE_PATH="${KEYSTORE_PATH:-$HOME/breakbind.keystore}"
+          export GODOT_ANDROID_KEYSTORE_RELEASE_USER="breakbind"
+          export GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD="breakbind"
+          export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="${KEYSTORE_PATH:-$HOME/breakbind.keystore}"
+          export GODOT_ANDROID_KEYSTORE_DEBUG_USER="breakbind"
+          export GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD="breakbind"
+          echo "release keystore: $GODOT_ANDROID_KEYSTORE_RELEASE_PATH"
+          test -f "$GODOT_ANDROID_KEYSTORE_RELEASE_PATH" \
+            || { echo "::error::keystore 不存在"; exit 1; }
 
           # 完整日志落盘，不再让 tail 吞掉退出码
           if [ "$BT" = "debug" ]; then
@@ -215,12 +237,33 @@ jobs:
           ls -lh "$OUT"
 
       - name: 上传完整导出日志
-        if: ${{ failure() || github.event.inputs.upload_log == 'true' }}
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: export-log
           path: build/*.log
           if-no-files-found: warn
+
+      - name: 校验 APK 包名与签名
+        if: success()
+        run: |
+          set -euo pipefail
+          OUT="$PWD/build/breakbind-battlefield.apk"
+          AAPT="$ANDROID_HOME/build-tools/34.0.0/aapt"
+          if [ -x "$AAPT" ]; then
+            echo "=== aapt dump badging ==="
+            "$AAPT" dump badging "$OUT" | head -8
+            PKG=$("$AAPT" dump badging "$OUT" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")
+            echo "解析到的包名: $PKG"
+            if [ "$PKG" != "xfan.games.gun" ]; then
+              echo "::error::包名不对（期望 xfan.games.gun，实际 $PKG）"
+              exit 1
+            fi
+            echo "::notice::包名校验通过: $PKG"
+          else
+            echo "::warning::找不到 aapt，跳过包名校验"
+          fi
+          ls -lh "$OUT"
 
       - name: 上传 APK 产物
         uses: actions/upload-artifact@v4
