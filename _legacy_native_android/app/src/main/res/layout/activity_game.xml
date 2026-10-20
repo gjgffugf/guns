@@ -1,0 +1,257 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#05080f">
+
+    <xfan.games.gun.game.GameSurfaceView
+        android:id="@+id/glView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- 左上角 FPS -->
+    <TextView
+        android:id="@+id/tvFps"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|left"
+        android:layout_margin="10dp"
+        android:background="@drawable/bg_hud"
+        android:paddingLeft="8dp"
+        android:paddingTop="3dp"
+        android:paddingRight="8dp"
+        android:paddingBottom="3dp"
+        android:text="FPS --"
+        android:textColor="#7cffb0"
+        android:textSize="13sp"
+        android:textStyle="bold" />
+
+    <!-- 血条 -->
+    <LinearLayout
+        android:layout_width="220dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|left"
+        android:layout_marginLeft="10dp"
+        android:layout_marginTop="38dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="HP"
+            android:textColor="#ffffff"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <xfan.games.gun.ui.BarView
+            android:id="@+id/barHp"
+            android:layout_width="0dp"
+            android:layout_height="12dp"
+            android:layout_marginLeft="8dp"
+            android:layout_weight="1" />
+
+        <TextView
+            android:id="@+id/tvHp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginLeft="8dp"
+            android:text="100"
+            android:textColor="#ffffff"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- 击杀提示 -->
+    <TextView
+        android:id="@+id/tvFeed"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="14dp"
+        android:background="@drawable/bg_hud"
+        android:paddingLeft="14dp"
+        android:paddingTop="5dp"
+        android:paddingRight="14dp"
+        android:paddingBottom="5dp"
+        android:text=""
+        android:textColor="#ffd54f"
+        android:textSize="14sp"
+        android:visibility="gone" />
+
+    <!-- 网络状态 -->
+    <TextView
+        android:id="@+id/tvNet"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="46dp"
+        android:text=""
+        android:textColor="#88ffffff"
+        android:textSize="11sp" />
+
+    <!-- 准星 -->
+    <xfan.games.gun.ui.CrosshairView
+        android:id="@+id/crosshair"
+        android:layout_width="72dp"
+        android:layout_height="72dp"
+        android:layout_gravity="center" />
+
+    <!-- 弹药 -->
+    <TextView
+        android:id="@+id/tvAmmo"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="22dp"
+        android:shadowColor="#000000"
+        android:shadowRadius="6"
+        android:text="30 / 150"
+        android:textColor="#ffffff"
+        android:textSize="26sp"
+        android:textStyle="bold" />
+
+    <!-- 姿态 -->
+    <TextView
+        android:id="@+id/tvStance"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="4dp"
+        android:text="站立"
+        android:textColor="#99ffffff"
+        android:textSize="12sp" />
+
+    <!-- 左下摇杆 -->
+    <xfan.games.gun.ui.JoystickView
+        android:id="@+id/joystick"
+        android:layout_width="150dp"
+        android:layout_height="150dp"
+        android:layout_gravity="bottom|left"
+        android:layout_margin="18dp" />
+
+    <!-- 右侧功能键 -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="right|center_vertical"
+        android:layout_marginRight="14dp"
+        android:gravity="center"
+        android:orientation="vertical">
+
+        <Button
+            android:id="@+id/btnAds"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_marginBottom="8dp"
+            android:background="@drawable/btn_round"
+            android:text="镜"
+            android:textAllCaps="false"
+            android:textColor="#ffffff"
+            android:textSize="15sp" />
+
+        <Button
+            android:id="@+id/btnJump"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_marginBottom="8dp"
+            android:background="@drawable/btn_round"
+            android:text="跳"
+            android:textAllCaps="false"
+            android:textColor="#ffffff"
+            android:textSize="15sp" />
+
+        <Button
+            android:id="@+id/btnCrouch"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_marginBottom="8dp"
+            android:background="@drawable/btn_round"
+            android:text="蹲"
+            android:textAllCaps="false"
+            android:textColor="#ffffff"
+            android:textSize="15sp" />
+
+        <Button
+            android:id="@+id/btnProne"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_marginBottom="8dp"
+            android:background="@drawable/btn_round"
+            android:text="趴"
+            android:textAllCaps="false"
+            android:textColor="#ffffff"
+            android:textSize="15sp" />
+
+        <Button
+            android:id="@+id/btnReload"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:background="@drawable/btn_round"
+            android:text="R"
+            android:textAllCaps="false"
+            android:textColor="#ffffff"
+            android:textSize="15sp" />
+    </LinearLayout>
+
+    <!-- 右下：疾跑 + 开火 -->
+    <Button
+        android:id="@+id/btnSprint"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:layout_gravity="bottom|right"
+        android:layout_marginBottom="130dp"
+        android:layout_marginRight="14dp"
+        android:background="@drawable/btn_round"
+        android:text="跑"
+        android:textAllCaps="false"
+        android:textColor="#ffffff"
+        android:textSize="15sp" />
+
+    <Button
+        android:id="@+id/btnFire"
+        android:layout_width="94dp"
+        android:layout_height="94dp"
+        android:layout_gravity="bottom|right"
+        android:layout_margin="20dp"
+        android:background="@drawable/btn_round"
+        android:text="开火"
+        android:textAllCaps="false"
+        android:textColor="#ffffff"
+        android:textSize="19sp"
+        android:textStyle="bold" />
+
+    <!-- 右上角退出 -->
+    <Button
+        android:id="@+id/btnExit"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_gravity="top|right"
+        android:layout_margin="12dp"
+        android:background="@drawable/btn_round"
+        android:text="✕"
+        android:textAllCaps="false"
+        android:textColor="#ffffff"
+        android:textSize="16sp" />
+
+    <!-- 阵亡遮罩 -->
+    <FrameLayout
+        android:id="@+id/deadMask"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:alpha="0.75"
+        android:background="#7a0000"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tvDead"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:text="你 已 阵 亡"
+            android:textColor="#ffffff"
+            android:textSize="40sp"
+            android:textStyle="bold" />
+    </FrameLayout>
+
+</FrameLayout>

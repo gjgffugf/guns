@@ -1,0 +1,117 @@
+name: 构建 Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: "4.3"
+  GODOT_STATUS: "stable"
+  ANDROID_HOME: /usr/local/lib/android/sdk
+  GRADLE_OPTS: "-Xmx3g -XX:MaxMetaspaceSize=768m"
+
+jobs:
+  build-android:
+    name: 导出 APK (arm64-v8a)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 安装 Android SDK 组件
+        run: |
+          set -e
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          SM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -f "$SM" ]; then SM="$(command -v sdkmanager)"; fi
+          echo "sdkmanager: $SM"
+          yes | "$SM" --licenses > /dev/null 2>&1 || true
+          "$SM" --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: 安装 Godot ${{ env.GODOT_VERSION }} headless
+        run: |
+          set -e
+          cd /tmp
+          curl -fSL --retry 3 -o godot.zip \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_STATUS}/Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64.zip"
+          unzip -q -o godot.zip
+          sudo install -m 755 "Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64" /usr/local/bin/godot
+          godot --version
+
+      - name: 安装导出模板
+        run: |
+          set -e
+          cd /tmp
+          curl -fSL --retry 3 -o templates.tpz \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_STATUS}/Godot_v${GODOT_VERSION}-${GODOT_STATUS}_export_templates.tpz"
+          mkdir -p "${HOME}/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_STATUS}"
+          unzip -q -o templates.tpz
+          mv templates/* "${HOME}/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_STATUS}/"
+          ls "${HOME}/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_STATUS}/" | head
+
+      - name: 生成调试签名密钥
+        run: |
+          set -e
+          keytool -genkeypair -v \
+            -keystore "${HOME}/debug.keystore" \
+            -alias androiddebugkey \
+            -storepass android -keypass android \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+      - name: 写入编辑器配置（SDK / JDK / 签名）
+        run: |
+          set -e
+          mkdir -p "${HOME}/.config/godot"
+          cat > "${HOME}/.config/godot/editor_settings-${GODOT_VERSION}.tres" <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+
+          export/android/android_sdk_path = "${ANDROID_HOME}"
+          export/android/java_sdk_path = "${JAVA_HOME}"
+          export/android/debug_keystore = "${HOME}/debug.keystore"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          export/android/shutdown_adb_on_exit = false
+          EOF
+          sed -i 's/^          //' "${HOME}/.config/godot/editor_settings-${GODOT_VERSION}.tres"
+          cat "${HOME}/.config/godot/editor_settings-${GODOT_VERSION}.tres"
+
+      - name: 导入项目资源
+        run: |
+          set -e
+          godot --headless --import 2>&1 | tail -30
+
+      - name: 导出 APK
+        run: |
+          set -e
+          mkdir -p build
+          godot --headless --verbose --export-release "Android" ./build/breakbind-battlefield.apk 2>&1 | tail -60
+          ls -lh build/
+
+      - name: 上传 APK 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: breakbind-battlefield-apk
+          path: build/*.apk
+          if-no-files-found: error
+
+      - name: 发布到 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/*.apk
+          generate_release_notes: true
