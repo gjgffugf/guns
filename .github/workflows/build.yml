@@ -77,6 +77,29 @@ jobs:
           test -f "${HOME}/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_STATUS}/android_source.zip" \
             || { echo "::error::android_source.zip 缺失，导出模板不完整"; exit 1; }
 
+      - name: 安装 Android 构建模板到项目（gradle 工程）
+        run: |
+          set -euo pipefail
+          TDIR="${HOME}/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_STATUS}"
+          SRC="$TDIR/android_source.zip"
+          test -f "$SRC" || { echo "::error::找不到 $SRC"; ls -l "$TDIR"; exit 1; }
+
+          # Godot 4 的 Android 导出走 gradle，必须先把构建模板装到 res://android/build/
+          rm -rf android/build
+          mkdir -p android/build
+          unzip -q -o "$SRC" -d android/build/
+          # 告诉 Godot 这个目录是构建产物，不要当资源导入
+          touch android/build/.gdignore
+          # 记录模板版本，Godot 用它判断模板是否匹配
+          echo "${GODOT_VERSION}.${GODOT_STATUS}" > android/.build_version
+
+          # 校验关键文件
+          for f in android/build/build.gradle android/build/settings.gradle; do
+            test -f "$f" || { echo "::error::$f 未生成，模板解压异常"; ls -la android/build/ | head -30; exit 1; }
+          done
+          echo "构建模板已安装:"
+          ls android/build/
+
       - name: 生成调试签名密钥
         run: |
           set -euo pipefail
@@ -105,6 +128,10 @@ jobs:
           EOF
           sed -i 's/^          //' "${HOME}/.config/godot/editor_settings-${GODOT_VERSION}.tres"
           cat "${HOME}/.config/godot/editor_settings-${GODOT_VERSION}.tres"
+
+      - name: 预热编辑器缓存（避免 headless 崩溃）
+        run: |
+          godot --headless --editor --quit || true
 
       - name: GDScript 预检（快速抓解析错误）
         continue-on-error: true
@@ -159,12 +186,12 @@ jobs:
             godot --headless --verbose --export-debug "Android" "$OUT" 2>&1 | tee build/export.log
             STATUS=${PIPESTATUS[0]}
           else
-            godot --headless --verbose --export-release "Android" "$OUT" 2>&1 | tee build/export.log
+            godot --headless --verbose --install-android-build-template --export-release "Android" "$OUT" 2>&1 | tee build/export.log
             STATUS=${PIPESTATUS[0]}
             if [ "$STATUS" -ne 0 ] || [ ! -f "$OUT" ]; then
               echo "::warning::release 导出失败，自动回退到 debug 导出"
               rm -f "$OUT"
-              godot --headless --verbose --export-debug "Android" "$OUT" 2>&1 | tee build/export-debug.log
+              godot --headless --verbose --install-android-build-template --export-debug "Android" "$OUT" 2>&1 | tee build/export-debug.log
               STATUS=${PIPESTATUS[0]}
               cat build/export-debug.log >> build/export.log
             fi

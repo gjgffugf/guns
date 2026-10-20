@@ -6,3 +6,7 @@ export/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Android 构建模板由 CI 自动生成（来自 android_source.zip），不要提交
+android/build/
+android/.build_version

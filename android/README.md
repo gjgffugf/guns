@@ -1,17 +1,31 @@
-# 关于自定义 Android 构建
+# Android 构建模板说明
 
-这里**故意不放 `android/build/` 目录**。
+## 为什么这里看不到 build/ 目录
 
-Godot 4 一旦检测到 `res://android/build/` 存在，就会切换到「自定义构建」模式，
-该模式要求额外安装 Android 源码模板并自行维护 gradle 工程，
-在 CI 上很容易静默失败（表现就是导出步骤打勾但 apk 不生成）。
+Godot 4 的 Android 导出走 **Gradle 构建**，要求项目里有 `res://android/build/`
+这个 Gradle 工程（由导出模板里的 `android_source.zip` 解包而来）。
 
-本项目走的是引擎内置的 gradle 构建，所需的网络权限等全部写在
-`export_presets.cfg` 的 `permissions/*` 里，由 Godot 自动合并进清单：
+- **本机开发**：Godot 菜单 `项目 → 安装 Android 构建模板` 会生成它
+- **CI**：工作流里已自动从导出模板解包生成，见
+  `.github/workflows/build.yml` 的「安装 Android 构建模板到项目」步骤
+
+这个目录是**生成物**，已在 `.gitignore` 里忽略，不要提交进仓库。
+如果本机报「Android build template not installed in the project」，
+就是它缺失了，执行上面的菜单项即可。
+
+## 网络权限
+
+联机需要的权限写在 `export_presets.cfg` 里，Godot 会自动合并进最终清单：
 
     permissions/internet=true
     permissions/access_network_state=true
     permissions/access_wifi_state=true
 
-如果以后确实需要自定义清单（比如加第三方 SDK），再放 `android/build/`，
-同时在 exporter 里指定 `custom_template/release` 与 `custom_template/debug`。
+## 需要自定义清单时（加第三方 SDK 等）
+
+等 CI 生成 `android/build/` 之后，再修改里面的 `AndroidManifest.xml` / `config.gradle`，
+并在 `export_presets.cfg` 里指定：
+
+    gradle_build/use_gradle_build=true
+    custom_template/release="..."
+    custom_template/debug="..."
