@@ -7,18 +7,28 @@ on:
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
+    inputs:
+      build_type:
+        description: 构建类型
+        type: choice
+        default: release
+        options: [ release, debug ]
+      upload_log:
+        description: 总是上传完整导出日志（排错用）
+        type: boolean
+        default: true
 
 env:
   GODOT_VERSION: "4.3"
   GODOT_STATUS: "stable"
   ANDROID_HOME: /usr/local/lib/android/sdk
-  GRADLE_OPTS: "-Xmx3g -XX:MaxMetaspaceSize=768m"
+  GRADLE_OPTS: "-Xmx3g -XX:MaxMetaspaceSize=768m -Dorg.gradle.daemon=false"
 
 jobs:
   build-android:
     name: 导出 APK (arm64-v8a)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: 检出代码
@@ -32,17 +42,20 @@ jobs:
 
       - name: 安装 Android SDK 组件
         run: |
-          set -e
+          set -euo pipefail
           echo "ANDROID_HOME=$ANDROID_HOME"
           SM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          if [ ! -f "$SM" ]; then SM="$(command -v sdkmanager)"; fi
-          echo "sdkmanager: $SM"
+          [ -x "$SM" ] || SM="$(command -v sdkmanager || true)"
+          [ -n "$SM" ] || { echo "::error::找不到 sdkmanager"; exit 1; }
           yes | "$SM" --licenses > /dev/null 2>&1 || true
           "$SM" --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          # 校验，避免 --install 静默失败
+          test -d "$ANDROID_HOME/platforms/android-34" || { echo "::error::android-34 未安装"; exit 1; }
+          test -d "$ANDROID_HOME/build-tools/34.0.0" || { echo "::error::build-tools 34.0.0 未安装"; exit 1; }
 
       - name: 安装 Godot ${{ env.GODOT_VERSION }} headless
         run: |
-          set -e
+          set -euo pipefail
           cd /tmp
           curl -fSL --retry 3 -o godot.zip \
             "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_STATUS}/Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64.zip"
@@ -52,18 +65,21 @@ jobs:
 
       - name: 安装导出模板
         run: |
-          set -e
+          set -euo pipefail
           cd /tmp
           curl -fSL --retry 3 -o templates.tpz \
             "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_STATUS}/Godot_v${GODOT_VERSION}-${GODOT_STATUS}_export_templates.tpz"
           mkdir -p "${HOME}/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_STATUS}"
           unzip -q -o templates.tpz
           mv templates/* "${HOME}/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_STATUS}/"
-          ls "${HOME}/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_STATUS}/" | head
+          # 必须校验模板真的落到位，否则 gradle 导出会静默失败
+          ls "${HOME}/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_STATUS}/"
+          test -f "${HOME}/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_STATUS}/android_source.zip" \
+            || { echo "::error::android_source.zip 缺失，导出模板不完整"; exit 1; }
 
       - name: 生成调试签名密钥
         run: |
-          set -e
+          set -euo pipefail
           keytool -genkeypair -v \
             -keystore "${HOME}/debug.keystore" \
             -alias androiddebugkey \
@@ -73,7 +89,7 @@ jobs:
 
       - name: 写入编辑器配置（SDK / JDK / 签名）
         run: |
-          set -e
+          set -euo pipefail
           mkdir -p "${HOME}/.config/godot"
           cat > "${HOME}/.config/godot/editor_settings-${GODOT_VERSION}.tres" <<EOF
           [gd_resource type="EditorSettings" format=3]
@@ -92,15 +108,62 @@ jobs:
 
       - name: 导入项目资源
         run: |
-          set -e
-          godot --headless --import 2>&1 | tail -30
+          set -euo pipefail
+          mkdir -p build
+          godot --headless --import 2>&1 | tee build/import.log | tail -30
+          grep -iE "error|failed|script error" build/import.log && {
+            echo "::error::导入资源阶段有脚本错误，见 build/import.log"; exit 1; }
+          echo "导入完成"
 
       - name: 导出 APK
+        id: export
         run: |
-          set -e
+          set -euo pipefail
           mkdir -p build
-          godot --headless --verbose --export-release "Android" ./build/breakbind-battlefield.apk 2>&1 | tail -60
-          ls -lh build/
+          BT="${{ github.event.inputs.build_type || 'release' }}"
+          OUT="$PWD/build/breakbind-battlefield.apk"
+          echo "构建类型: $BT   输出: $OUT"
+
+          # 完整日志落盘，不再让 tail 吞掉退出码
+          if [ "$BT" = "debug" ]; then
+            godot --headless --verbose --export-debug "Android" "$OUT" 2>&1 | tee build/export.log
+            STATUS=${PIPESTATUS[0]}
+          else
+            godot --headless --verbose --export-release "Android" "$OUT" 2>&1 | tee build/export.log
+            STATUS=${PIPESTATUS[0]}
+            if [ "$STATUS" -ne 0 ] || [ ! -f "$OUT" ]; then
+              echo "::warning::release 导出失败，自动回退到 debug 导出"
+              rm -f "$OUT"
+              godot --headless --verbose --export-debug "Android" "$OUT" 2>&1 | tee build/export-debug.log
+              STATUS=${PIPESTATUS[0]}
+              cat build/export-debug.log >> build/export.log
+            fi
+          fi
+          echo "godot 退出码: $STATUS"
+
+          # 无论成功失败都把关键报错打到日志里
+          echo "----- 日志中的错误行 -----"
+          grep -inE "error|failed|cannot|could not|unable|exception|not found" build/export.log | head -40 || true
+          echo "--------------------------"
+
+          if [ "$STATUS" -ne 0 ]; then
+            echo "::error::Godot 导出失败（退出码 $STATUS），完整日志见 build/export.log"
+            exit 1
+          fi
+          if [ ! -f "$OUT" ]; then
+            echo "::error::导出结束但未找到 $OUT"
+            ls -lhR build/ || true
+            exit 1
+          fi
+          ls -lh "$OUT"
+
+      - name: 上传完整导出日志
+        if: ${{ failure() || github.event.inputs.upload_log == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: export-log
+          path: build/*.log
+          if-no-files-found: warn
 
       - name: 上传 APK 产物
         uses: actions/upload-artifact@v4
