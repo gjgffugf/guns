@@ -27,9 +27,9 @@ func _ready() -> void:
 		_players.append(p)
 	# 预热，顺便把缺失的资源暴露在日志里
 	for k in SFX_PATH:
-		_get(k)
+		_clip(k)
 
-func _get(name: String) -> AudioStream:
+func _clip(name: String) -> AudioStream:
 	if _cache.has(name):
 		return _cache[name]
 	var path: String = SFX_PATH.get(name, "")
@@ -42,7 +42,7 @@ func _get(name: String) -> AudioStream:
 	return s
 
 func play(name: String, vol_db: float = 0.0, pitch: float = 1.0) -> void:
-	var s := _get(name)
+	var s := _clip(name)
 	if s == null:
 		return
 	var p := _players[_next]
@@ -54,7 +54,7 @@ func play(name: String, vol_db: float = 0.0, pitch: float = 1.0) -> void:
 
 ## 3D 位置音效（枪声 / 受伤），挂在临时节点上
 func play_at(name: String, pos: Vector3) -> void:
-	var s := _get(name)
+	var s := _clip(name)
 	if s == null:
 		return
 	var p := AudioStreamPlayer3D.new()

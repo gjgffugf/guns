@@ -132,15 +132,15 @@ func _build() -> void:
 	)
 	v.add_child(_vol)
 
-	var close := Button.new()
-	close.text = "关闭"
-	close.custom_minimum_size = Vector2(0, 76)
-	close.add_theme_font_size_override("font_size", 28)
-	close.pressed.connect(func():
+	var close_btn := Button.new()
+	close_btn.text = "关闭"
+	close_btn.custom_minimum_size = Vector2(0, 76)
+	close_btn.add_theme_font_size_override("font_size", 28)
+	close_btn.pressed.connect(func():
 		Sfx.play("click")
 		close_panel()
 	)
-	v.add_child(close)
+	v.add_child(close_btn)
 
 func open_panel() -> void:
 	if _opening:

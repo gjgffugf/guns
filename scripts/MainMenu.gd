@@ -3,6 +3,7 @@ extends Control
 
 var _settings: SettingsPanel
 var _bg: Control
+var _toast_lbl: Label
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -166,8 +167,6 @@ func _mode_button(title: String, desc: String, col: Color, cb: Callable) -> Butt
 		cb.call()
 	)
 	return b
-
-var _toast_lbl: Label
 
 func _toast(msg: String) -> void:
 	if _toast_lbl == null or not is_instance_valid(_toast_lbl):

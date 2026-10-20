@@ -106,6 +106,13 @@ jobs:
           sed -i 's/^          //' "${HOME}/.config/godot/editor_settings-${GODOT_VERSION}.tres"
           cat "${HOME}/.config/godot/editor_settings-${GODOT_VERSION}.tres"
 
+      - name: GDScript 预检（快速抓解析错误）
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          python3 tools/check_gd.py || {
+            echo "::warning::预检发现问题，继续构建但很可能失败，请按上面提示修正"; }
+
       - name: 检查资源完整性
         run: |
           set -euo pipefail
