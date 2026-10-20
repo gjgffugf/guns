@@ -4,7 +4,8 @@ extends CanvasLayer
 
 signal back_pressed()
 
-const BTN := 96.0
+const BTN := 92.0
+const STICK_R := 82.0
 
 var player: Player
 var fps_label: Label
@@ -40,8 +41,46 @@ var _btn_prone: Button
 var _btn_sprint: Button
 var _btn_reload: Button
 
-var _sprint_held: bool = false
+var _sprint_on: bool = false
 var _ads_held: bool = false
+
+# ------------------------------------------------------------------ 布局
+## 直接写锚点与偏移，不用 set_anchors_preset —— 后者在不同屏幕比例下
+## 对 size/position 的处理有歧义，横屏切换后容易算错位置。
+static func _rect(c: Control, ax0: float, ay0: float, ax1: float, ay1: float,
+		l: float, t: float, r: float, b: float) -> void:
+	c.anchor_left = ax0
+	c.anchor_top = ay0
+	c.anchor_right = ax1
+	c.anchor_bottom = ay1
+	c.offset_left = l
+	c.offset_top = t
+	c.offset_right = r
+	c.offset_bottom = b
+
+## 左上
+static func _tl(c: Control, x: float, y: float, w: float, h: float) -> void:
+	_rect(c, 0.0, 0.0, 0.0, 0.0, x, y, x + w, y + h)
+
+## 右上（mx/my 为距右边/顶边的边距）
+static func _tr(c: Control, mx: float, my: float, w: float, h: float) -> void:
+	_rect(c, 1.0, 0.0, 1.0, 0.0, -mx - w, my, -mx, my + h)
+
+## 左下（mx/my 为距左边/底边的边距）
+static func _bl(c: Control, mx: float, my: float, w: float, h: float) -> void:
+	_rect(c, 0.0, 1.0, 0.0, 1.0, mx, -my - h, mx + w, -my)
+
+## 右下
+static func _br(c: Control, mx: float, my: float, w: float, h: float) -> void:
+	_rect(c, 1.0, 1.0, 1.0, 1.0, -mx - w, -my - h, -mx, -my)
+
+## 水平居中 + 贴底（w 为宽度，my 为距底边距离）
+static func _bc(c: Control, w: float, my: float, h: float) -> void:
+	_rect(c, 0.5, 1.0, 0.5, 1.0, -w * 0.5, -my - h, w * 0.5, -my)
+
+## 正中
+static func _center(c: Control, w: float, h: float) -> void:
+	_rect(c, 0.5, 0.5, 0.5, 0.5, -w * 0.5, -h * 0.5, w * 0.5, h * 0.5)
 
 func _ready() -> void:
 	layer = 10
@@ -56,7 +95,7 @@ func _build() -> void:
 
 	# ---- FPS（左上角）----
 	fps_label = Label.new()
-	fps_label.position = Vector2(16, 12)
+	_tl(fps_label, 18, 14, 240, 36)
 	fps_label.text = "FPS 60"
 	fps_label.add_theme_font_size_override("font_size", 26)
 	fps_label.add_theme_color_override("font_color", Color(0.5, 1.0, 0.6))
@@ -66,7 +105,7 @@ func _build() -> void:
 	root.add_child(fps_label)
 
 	ping_label = Label.new()
-	ping_label.position = Vector2(16, 46)
+	_tl(ping_label, 18, 54, 240, 30)
 	ping_label.text = ""
 	ping_label.add_theme_font_size_override("font_size", 20)
 	ping_label.add_theme_color_override("font_color", Color(0.7, 0.85, 1.0))
@@ -77,18 +116,14 @@ func _build() -> void:
 
 	# ---- 击杀信息（右上角）----
 	kill_feed = VBoxContainer.new()
-	kill_feed.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	kill_feed.position = Vector2(-330, 60)
-	kill_feed.size = Vector2(314, 300)
+	_tr(kill_feed, 18, 86, 330, 250)
 	kill_feed.alignment = BoxContainer.ALIGNMENT_BEGIN
 	kill_feed.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(kill_feed)
 
 	# ---- 底部：血条 + 弹药 ----
 	var bottom := HBoxContainer.new()
-	bottom.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	bottom.position = Vector2(20, -70)
-	bottom.size = Vector2(430, 56)
+	_bc(bottom, 640, 20, 52)
 	bottom.add_theme_constant_override("separation", 12)
 	bottom.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(bottom)
@@ -98,7 +133,7 @@ func _build() -> void:
 	hp_bar.max_value = 100
 	hp_bar.value = 100
 	hp_bar.show_percentage = false
-	hp_bar.custom_minimum_size = Vector2(250, 26)
+	hp_bar.custom_minimum_size = Vector2(360, 26)
 	bottom.add_child(hp_bar)
 	_style_bar(hp_bar, Color(0.85, 0.16, 0.18), Color(0.10, 0.11, 0.13))
 
@@ -116,13 +151,12 @@ func _build() -> void:
 	ammo_label.add_theme_color_override("font_color", Color(1.0, 0.92, 0.55))
 	ammo_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
 	ammo_label.add_theme_constant_override("outline_size", 6)
-	ammo_label.custom_minimum_size = Vector2(160, 0)
+	ammo_label.custom_minimum_size = Vector2(180, 0)
 	ammo_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	bottom.add_child(ammo_label)
 
 	stance_label = Label.new()
-	stance_label.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	stance_label.position = Vector2(20, -104)
+	_bc(stance_label, 640, 76, 32)
 	stance_label.text = "站立"
 	stance_label.add_theme_font_size_override("font_size", 22)
 	stance_label.add_theme_color_override("font_color", Color(0.75, 0.85, 1.0))
@@ -146,9 +180,7 @@ func _build() -> void:
 
 	# ---- 中央提示 ----
 	notice = Label.new()
-	notice.set_anchors_preset(Control.PRESET_CENTER)
-	notice.position = Vector2(-300, -60)
-	notice.size = Vector2(600, 120)
+	_center(notice, 760, 130)
 	notice.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	notice.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -161,9 +193,7 @@ func _build() -> void:
 
 	# ---- 退出按钮 ----
 	var back := _mk_button("退出", Color(0.35, 0.12, 0.14), 20)
-	back.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	back.position = Vector2(-118, 12)
-	back.size = Vector2(104, 56)
+	_tr(back, 18, 14, 110, 58)
 	back.pressed.connect(func(): back_pressed.emit())
 	root.add_child(back)
 
@@ -209,21 +239,19 @@ func _circle_button(text: String, col: Color, fs: int = 24) -> Button:
 
 func _build_stick(root: Control) -> void:
 	_stick_area = Control.new()
-	_stick_area.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	_stick_area.position = Vector2(10, -430)
-	_stick_area.size = Vector2(340, 420)
+	_bl(_stick_area, 28, 46, 272, 260)
 	_stick_area.mouse_filter = Control.MOUSE_FILTER_STOP
 	_stick_area.gui_input.connect(_on_stick_input)
 	root.add_child(_stick_area)
 
-	_stick_base = Vector2(150, 300)
+	_stick_base = Vector2(136, 130)
 	var base := Control.new()
 	base.set_anchors_preset(Control.PRESET_FULL_RECT)
 	base.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	base.draw.connect(func():
-		base.draw_circle(_stick_base, 86.0, Color(1, 1, 1, 0.07))
-		base.draw_arc(_stick_base, 86.0, 0, TAU, 48, Color(1, 1, 1, 0.18), 3.0)
-		base.draw_circle(_stick_base + _stick_vec * 86.0, 40.0, Color(1, 1, 1, 0.22))
+		base.draw_circle(_stick_base, STICK_R, Color(1, 1, 1, 0.07))
+		base.draw_arc(_stick_base, STICK_R, 0, TAU, 48, Color(1, 1, 1, 0.18), 3.0)
+		base.draw_circle(_stick_base + _stick_vec * STICK_R, 38.0, Color(1, 1, 1, 0.22))
 	)
 	_stick_area.add_child(base)
 	_stick_knob = base
@@ -238,8 +266,7 @@ func _build_look_area(root: Control) -> void:
 
 func _build_action_buttons(root: Control) -> void:
 	_btn_fire = _circle_button("开火", Color(0.68, 0.14, 0.16), 26)
-	_btn_fire.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	_btn_fire.position = Vector2(-150, -120)
+	_br(_btn_fire, 28, 28, BTN, BTN)
 	_btn_fire.gui_input.connect(func(e):
 		if player == null:
 			return
@@ -251,8 +278,7 @@ func _build_action_buttons(root: Control) -> void:
 	root.add_child(_btn_fire)
 
 	_btn_ads = _circle_button("开镜", Color(0.16, 0.34, 0.55), 22)
-	_btn_ads.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	_btn_ads.position = Vector2(-150, -240)
+	_br(_btn_ads, 28, 140, BTN, BTN)
 	_btn_ads.gui_input.connect(func(e):
 		if e is InputEventScreenTouch or e is InputEventMouseButton:
 			_ads_held = e.pressed
@@ -260,24 +286,30 @@ func _build_action_buttons(root: Control) -> void:
 	root.add_child(_btn_ads)
 
 	_btn_reload = _circle_button("换弹", Color(0.30, 0.30, 0.34), 22)
-	_btn_reload.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	_btn_reload.position = Vector2(-150, -356)
+	_br(_btn_reload, 28, 252, BTN, BTN)
 	_btn_reload.pressed.connect(func():
 		if player != null:
 			player.start_reload())
 	root.add_child(_btn_reload)
 
+	# 跳跃：在“按下”瞬间就触发，等松手再跳会明显迟滞，
+	# 也做不到边跑边跳（按住摇杆的同时必须能立刻起跳）
 	_btn_jump = _circle_button("跳", Color(0.20, 0.42, 0.30), 24)
-	_btn_jump.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	_btn_jump.position = Vector2(-292, -120)
-	_btn_jump.pressed.connect(func():
-		if player != null:
-			player.want_jump = true)
+	_br(_btn_jump, 140, 28, BTN, BTN)
+	_btn_jump.gui_input.connect(func(e):
+		if player == null:
+			return
+		if e is InputEventScreenTouch:
+			if e.pressed:
+				player.request_jump()
+		elif e is InputEventMouseButton and e.pressed \
+				and e.button_index == MOUSE_BUTTON_LEFT:
+			player.request_jump()
+	)
 	root.add_child(_btn_jump)
 
 	_btn_crouch = _circle_button("蹲", Color(0.28, 0.34, 0.42), 22)
-	_btn_crouch.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	_btn_crouch.position = Vector2(-292, -240)
+	_br(_btn_crouch, 140, 140, BTN, BTN)
 	_btn_crouch.pressed.connect(func():
 		if player == null:
 			return
@@ -286,8 +318,7 @@ func _build_action_buttons(root: Control) -> void:
 	root.add_child(_btn_crouch)
 
 	_btn_prone = _circle_button("趴", Color(0.28, 0.34, 0.42), 22)
-	_btn_prone.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	_btn_prone.position = Vector2(-292, -356)
+	_br(_btn_prone, 140, 252, BTN, BTN)
 	_btn_prone.pressed.connect(func():
 		if player == null:
 			return
@@ -295,12 +326,13 @@ func _build_action_buttons(root: Control) -> void:
 				else Player.Stance.STAND))
 	root.add_child(_btn_prone)
 
+	# 疾跑改成点一下切换：左手拇指要同时按住摇杆和疾跑键根本按不过来
 	_btn_sprint = _circle_button("疾跑", Color(0.45, 0.36, 0.14), 22)
-	_btn_sprint.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	_btn_sprint.position = Vector2(24, -470)
-	_btn_sprint.gui_input.connect(func(e):
-		if e is InputEventScreenTouch or e is InputEventMouseButton:
-			_sprint_held = e.pressed
+	_bl(_btn_sprint, 324, 100, 104, 104)
+	_btn_sprint.toggle_mode = true
+	_btn_sprint.toggled.connect(func(on: bool):
+		_sprint_on = on
+		Sfx.play("click")
 	)
 	root.add_child(_btn_sprint)
 
@@ -334,9 +366,9 @@ func _on_stick_input(e: InputEvent) -> void:
 func _update_stick(p: Vector2) -> void:
 	var d := p - _stick_base
 	var r := d.length()
-	if r > 86.0:
-		d = d.normalized() * 86.0
-	_stick_vec = d / 86.0
+	if r > STICK_R:
+		d = d.normalized() * STICK_R
+	_stick_vec = d / STICK_R
 	_stick_knob.queue_redraw()
 	if player:
 		# 摇杆上推 -> move_axis.y = -1，与键盘 W 一致（前进方向为 -Z）
@@ -434,7 +466,7 @@ func _process(delta: float) -> void:
 		_spread_px = clampf(s * 900.0, 4.0, 90.0)
 		crosshair.queue_redraw()
 		player.touch_ads = _ads_held
-		player.touch_sprint = _sprint_held
+		player.touch_sprint = _sprint_on
 
 	if _hit_t > 0.0:
 		_hit_t -= delta

@@ -44,69 +44,82 @@ func _draw_bg() -> void:
 		_bg.draw_rect(Rect2(0, yy, _bg.size.x, 8.0), Color(0, 0, 0, 0.02 * (1 - i / 40.0)))
 
 func _build_ui() -> void:
-	var root := VBoxContainer.new()
-	root.set_anchors_preset(Control.PRESET_FULL_RECT)
-	root.offset_left = 40
-	root.offset_right = -40
-	root.offset_top = 120
-	root.offset_bottom = -120
-	root.add_theme_constant_override("separation", 26)
+	# 横屏左文右按钮的双栏布局，纵向空间（720）比竖屏紧张得多
+	var root := HBoxContainer.new()
+	root.anchor_left = 0.05
+	root.anchor_top = 0.10
+	root.anchor_right = 0.95
+	root.anchor_bottom = 0.90
+	root.add_theme_constant_override("separation", 44)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(root)
 
-	# 标题
+	var left := VBoxContainer.new()
+	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left.add_theme_constant_override("separation", 14)
+	left.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(left)
+
+	var right := VBoxContainer.new()
+	right.custom_minimum_size = Vector2(500, 0)
+	right.add_theme_constant_override("separation", 18)
+	right.alignment = BoxContainer.ALIGNMENT_CENTER
+	root.add_child(right)
+
+	# ---- 左侧：标题 ----
 	var title := Label.new()
 	title.text = "破绷战场"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 82)
+	title.add_theme_font_size_override("font_size", 54)
 	title.add_theme_color_override("font_color", Color(1.0, 0.95, 0.92))
 	title.add_theme_color_override("font_outline_color", Color(0.75, 0.1, 0.12))
-	title.add_theme_constant_override("outline_size", 14)
-	root.add_child(title)
+	title.add_theme_constant_override("outline_size", 10)
+	left.add_child(title)
 
 	var sub := Label.new()
 	sub.text = "B R E A K B I N D   B A T T L E F I E L D"
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	sub.add_theme_font_size_override("font_size", 26)
+	sub.add_theme_font_size_override("font_size", 20)
 	sub.add_theme_color_override("font_color", Color(0.55, 0.65, 0.78))
-	root.add_child(sub)
+	left.add_child(sub)
 
 	var spacer := Control.new()
-	spacer.custom_minimum_size = Vector2(0, 90)
-	root.add_child(spacer)
+	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	left.add_child(spacer)
 
-	# 模式按钮
-	root.add_child(_mode_button("单 人 模 式", "离线训练场 · 含 1 名战术人机",
+	var foot := Label.new()
+	foot.text = "xfan.games.gun   v0.1.0"
+	foot.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	foot.add_theme_font_size_override("font_size", 20)
+	foot.add_theme_color_override("font_color", Color(0.42, 0.46, 0.54))
+	left.add_child(foot)
+
+	# ---- 右侧：模式按钮 ----
+	right.add_child(_mode_button("单 人 模 式", "离线训练场 · 含 1 名战术人机",
 			Color(0.72, 0.16, 0.18), func():
 		Trans.goto("res://scenes/Game.tscn", "正在载入训练场")
 	))
-	root.add_child(_mode_button("多 人 模 式", "连接自建服务器 · 联机对战",
+	right.add_child(_mode_button("多 人 模 式", "连接自建服务器 · 联机对战",
 			Color(0.16, 0.38, 0.62), func():
 		Trans.goto("res://scenes/MultiplayerMenu.tscn", "正在连接配置")
 	))
-	root.add_child(_mode_button("开 房 间", "功能开发中 · 敬请期待",
+	right.add_child(_mode_button("开 房 间", "功能开发中 · 敬请期待",
 			Color(0.24, 0.26, 0.30), func():
 		Sfx.play("click")
 		_toast("开房间功能暂未开放")
 	))
 
-	var spacer2 := Control.new()
-	spacer2.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root.add_child(spacer2)
-
-	var foot := Label.new()
-	foot.text = "xfan.games.gun   v0.1.0"
-	foot.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	foot.add_theme_font_size_override("font_size", 22)
-	foot.add_theme_color_override("font_color", Color(0.42, 0.46, 0.54))
-	root.add_child(foot)
-
 	# ---- 右上角设置按钮 ----
 	var gear := Button.new()
 	gear.text = "设置"
-	gear.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	gear.position = Vector2(-150, 24)
-	gear.size = Vector2(126, 68)
+	gear.anchor_left = 1.0
+	gear.anchor_top = 0.0
+	gear.anchor_right = 1.0
+	gear.anchor_bottom = 0.0
+	gear.offset_left = -150.0
+	gear.offset_top = 24.0
+	gear.offset_right = -24.0
+	gear.offset_bottom = 92.0
 	gear.add_theme_font_size_override("font_size", 26)
 	var n := StyleBoxFlat.new()
 	n.bg_color = Color(0.14, 0.16, 0.22, 0.92)
@@ -125,7 +138,7 @@ func _build_ui() -> void:
 
 func _mode_button(title: String, desc: String, col: Color, cb: Callable) -> Button:
 	var b := Button.new()
-	b.custom_minimum_size = Vector2(0, 138)
+	b.custom_minimum_size = Vector2(0, 104)
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = col
 	sb.set_corner_radius_all(14)

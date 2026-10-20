@@ -42,8 +42,8 @@ const ADS_SPREAD := 0.002
 const MOVE_SPREAD := 0.030
 const RECOIL_PITCH := 0.013
 const RECOIL_YAW := 0.004
-const FOV_HIP := 78.0
-const FOV_ADS := 46.0
+const FOV_HIP := 62.0
+const FOV_ADS := 38.0
 
 var hp: float = MAX_HP
 var alive: bool = true
@@ -58,7 +58,10 @@ var display_name: String = "你"
 
 # 由外部（键盘 / 虚拟摇杆 / HUD 按钮）写入
 var move_axis: Vector2 = Vector2.ZERO
-var want_jump: bool = false
+var jump_buffer_t: float = 0.0      # 跳跃缓冲：落地前按下也算数
+var coyote_t: float = 0.0           # 土狼时间：刚离地还能补一跳
+const JUMP_BUFFER := 0.13
+const COYOTE_TIME := 0.10
 var want_fire: bool = false
 var touch_ads: bool = false        # HUD「开镜」按钮
 var touch_sprint: bool = false     # HUD「疾跑」按钮
@@ -195,7 +198,7 @@ func _unhandled_input(e: InputEvent) -> void:
 			KEY_R:
 				start_reload()
 			KEY_SPACE:
-				want_jump = true
+				request_jump()
 			KEY_SHIFT:
 				pass
 
@@ -205,6 +208,13 @@ func add_look(d: Vector2) -> void:
 func set_look_axis(v: Vector2) -> void:
 	_look += v
 
+## 请求起跳。HUD 的跳跃按钮在“按下”瞬间就调用它，
+## 不用等松手，所以能边推摇杆边跳。
+func request_jump() -> void:
+	if not alive:
+		return
+	jump_buffer_t = JUMP_BUFFER
+
 func _read_keyboard() -> void:
 	if OS.has_feature("pc"):
 		move_axis = Input.get_vector("mv_left", "mv_right", "mv_forward", "mv_back")
@@ -212,7 +222,7 @@ func _read_keyboard() -> void:
 		# 移动端保留摇杆写入的 move_axis
 		pass
 	if Input.is_action_just_pressed("mv_jump"):
-		want_jump = true
+		request_jump()
 	_kb_sprint = Input.is_action_pressed("mv_sprint")
 	if Input.is_action_just_pressed("reload"):
 		start_reload()
@@ -282,15 +292,25 @@ func _update_move(delta: float) -> void:
 	velocity.x = move_toward(velocity.x, target.x, a * spd * delta * 0.6 + a * delta)
 	velocity.z = move_toward(velocity.z, target.z, a * spd * delta * 0.6 + a * delta)
 
+	# 跳跃缓冲与土狼时间：边跑边跳时手感才跟得上，
+	# 而且水平速度完全不重置，起跳后仍可继续控制方向
+	jump_buffer_t -= delta
 	if is_on_floor():
-		if want_jump and stance != Stance.PRONE:
-			velocity.y = JUMP_VELOCITY
-			Sfx.play("step", -8.0, 1.35)
-		elif velocity.y < 0:
+		coyote_t = COYOTE_TIME
+	else:
+		coyote_t -= delta
+
+	if jump_buffer_t > 0.0 and coyote_t > 0.0 and stance != Stance.PRONE:
+		velocity.y = JUMP_VELOCITY
+		jump_buffer_t = 0.0
+		coyote_t = 0.0
+		Sfx.play("step", -8.0, 1.35)
+
+	if is_on_floor():
+		if velocity.y < 0.0:
 			velocity.y = -1.0
 	else:
 		velocity.y -= GRAVITY * delta
-	want_jump = false
 
 func _update_stance(delta: float) -> void:
 	var target_h: float = STANCE_HEIGHT[stance]

@@ -2,7 +2,7 @@
 import math, os, subprocess
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-W, H = 720, 1280
+W, H = 1280, 720
 FPS = 30
 DUR = 3.2
 N = int(FPS * DUR)
@@ -10,10 +10,10 @@ OUT = "/data/workspace/breakbind-battlefield/assets/splash/frames"
 os.makedirs(OUT, exist_ok=True)
 
 FONT_PATH = "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"
-f_main = ImageFont.truetype(FONT_PATH, 120)
-f_sub = ImageFont.truetype(FONT_PATH, 34)
-f_eng = ImageFont.truetype(FONT_PATH, 40)
-f_ver = ImageFont.truetype(FONT_PATH, 26)
+f_main = ImageFont.truetype(FONT_PATH, 104)
+f_sub = ImageFont.truetype(FONT_PATH, 30)
+f_eng = ImageFont.truetype(FONT_PATH, 34)
+f_ver = ImageFont.truetype(FONT_PATH, 24)
 
 
 def ease_out(x):
@@ -30,10 +30,10 @@ def frame(i):
     d = ImageDraw.Draw(img)
 
     # 背景径向渐变 + 网格
-    cx, cy = W / 2, H * 0.42
+    cx, cy = W / 2, H * 0.44
     for y in range(0, H, 4):
         for x in range(0, W, 4):
-            dist = math.hypot(x - cx, y - cy) / (W * 0.9)
+            dist = math.hypot(x - cx, y - cy) / (W * 0.55)
             v = clamp(1.0 - dist, 0, 1)
             r = int(10 + 42 * v * v)
             g = int(12 + 16 * v * v)
@@ -56,7 +56,7 @@ def frame(i):
 
     # 六边形准星旋转
     ang = t * 1.1
-    rad = 190 + 12 * math.sin(t * 4)
+    rad = 150 + 10 * math.sin(t * 4)
     pts = []
     for k in range(6):
         a = ang + k * math.pi / 3
@@ -85,22 +85,22 @@ def frame(i):
 
     # 副标题
     sa = clamp((t - 0.75) / 0.6)
-    d.text((cx, cy + 130), "B R E A K B I N D   B A T T L E F I E L D", font=f_eng,
+    d.text((cx, cy + 86), "B R E A K B I N D   B A T T L E F I E L D", font=f_eng,
            fill=(int(190 * sa), int(200 * sa), int(215 * sa)), anchor="mm")
-    d.text((cx, cy + 185), "进入战场 · 火力全开", font=f_sub,
+    d.text((cx, cy + 128), "进入战场 · 火力全开", font=f_sub,
            fill=(int(150 * sa), int(160 * sa), int(175 * sa)), anchor="mm")
 
     # 底部进度条
     pa = clamp((t - 0.5) / 0.4)
-    bw = 340
+    bw = 460
     x0, x1 = cx - bw / 2, cx + bw / 2
-    yb = H - 190
+    yb = H - 92
     d.rectangle([x0, yb, x1, yb + 6], fill=(int(60 * pa), int(65 * pa), int(75 * pa)))
     prog = clamp((t - 0.5) / (DUR - 0.9))
     d.rectangle([x0, yb, x0 + bw * prog, yb + 6], fill=(228, 48, 52))
-    d.text((cx, yb + 44), "LOADING  %d%%" % int(prog * 100), font=f_ver,
+    d.text((cx, yb + 34), "LOADING  %d%%" % int(prog * 100), font=f_ver,
            fill=(140, 150, 165), anchor="mm")
-    d.text((cx, H - 90), "xfan.games.gun", font=f_ver, fill=(85, 92, 105), anchor="mm")
+    d.text((cx, H - 36), "xfan.games.gun", font=f_ver, fill=(85, 92, 105), anchor="mm")
 
     # 结尾淡出
     fa = clamp((t - (DUR - 0.45)) / 0.45)
@@ -126,8 +126,8 @@ subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-framerate", str(FPS),
                 "-crf", "28", "-movflags", "+faststart",
                 f"{base}/splash.mp4"], check=True)
 # 静态回退图（jpg / png）
-frame(int(FPS * 2.0)).resize((540, 960)).save(
+frame(int(FPS * 2.0)).resize((960, 540)).save(
     "/data/workspace/breakbind-battlefield/assets/splash/splash_fallback.png")
-frame(int(FPS * 2.0)).resize((540, 960)).convert("RGB").save(
+frame(int(FPS * 2.0)).resize((960, 540)).convert("RGB").save(
     "/data/workspace/breakbind-battlefield/assets/splash/splash_fallback.jpg", quality=88)
 print("ok")

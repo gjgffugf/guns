@@ -33,7 +33,7 @@ func _build() -> void:
 	add_child(center)
 
 	_panel = PanelContainer.new()
-	_panel.custom_minimum_size = Vector2(600, 0)
+	_panel.custom_minimum_size = Vector2(620, 0)
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.09, 0.10, 0.13, 0.98)
 	sb.set_corner_radius_all(18)
@@ -46,13 +46,13 @@ func _build() -> void:
 	center.add_child(_panel)
 
 	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 16)
+	v.add_theme_constant_override("separation", 10)
 	_panel.add_child(v)
 
 	var title := Label.new()
 	title.text = "设置"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 36)
+	title.add_theme_font_size_override("font_size", 30)
 	v.add_child(title)
 
 	# ---- 帧率 ----
@@ -68,7 +68,7 @@ func _build() -> void:
 	for f in FPS_OPTIONS:
 		var b := Button.new()
 		b.text = str(f)
-		b.custom_minimum_size = Vector2(0, 74)
+		b.custom_minimum_size = Vector2(0, 62)
 		b.add_theme_font_size_override("font_size", 26)
 		b.pressed.connect(func(): _set_fps(f))
 		b.toggle_mode = true
@@ -78,9 +78,9 @@ func _build() -> void:
 	_note = Label.new()
 	_note.text = "已关闭垂直同步，帧率上限由屏幕刷新率决定"
 	_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_note.add_theme_font_size_override("font_size", 19)
+	_note.add_theme_font_size_override("font_size", 18)
 	_note.add_theme_color_override("font_color", Color(0.65, 0.7, 0.8))
-	_note.custom_minimum_size = Vector2(560, 0)
+	_note.custom_minimum_size = Vector2(500, 0)
 	v.add_child(_note)
 
 	# ---- 灵敏度 ----
@@ -99,7 +99,7 @@ func _build() -> void:
 	_sens.min_value = 0.3
 	_sens.max_value = 3.0
 	_sens.step = 0.05
-	_sens.custom_minimum_size = Vector2(0, 40)
+	_sens.custom_minimum_size = Vector2(0, 36)
 	_sens.value_changed.connect(func(v_):
 		GameSettings.sensitivity = v_
 		_sens_val.text = "%.2f" % v_
@@ -123,7 +123,7 @@ func _build() -> void:
 	_vol.min_value = 0.0
 	_vol.max_value = 1.0
 	_vol.step = 0.05
-	_vol.custom_minimum_size = Vector2(0, 40)
+	_vol.custom_minimum_size = Vector2(0, 36)
 	_vol.value_changed.connect(func(v_):
 		GameSettings.master_volume = v_
 		_vol_val.text = "%d%%" % int(v_ * 100)
@@ -134,7 +134,7 @@ func _build() -> void:
 
 	var close_btn := Button.new()
 	close_btn.text = "关闭"
-	close_btn.custom_minimum_size = Vector2(0, 76)
+	close_btn.custom_minimum_size = Vector2(0, 64)
 	close_btn.add_theme_font_size_override("font_size", 28)
 	close_btn.pressed.connect(func():
 		Sfx.play("click")

@@ -100,9 +100,14 @@ func _build_skip() -> void:
 
 	_skip = Button.new()
 	_skip.text = "跳过"
-	_skip.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	_skip.position = Vector2(-140, 30)
-	_skip.size = Vector2(120, 64)
+	_skip.anchor_left = 1.0
+	_skip.anchor_top = 0.0
+	_skip.anchor_right = 1.0
+	_skip.anchor_bottom = 0.0
+	_skip.offset_left = -160.0
+	_skip.offset_top = 30.0
+	_skip.offset_right = -40.0
+	_skip.offset_bottom = 94.0
 	_skip.add_theme_font_size_override("font_size", 24)
 	var n := StyleBoxFlat.new()
 	n.bg_color = Color(0.15, 0.16, 0.2, 0.85)
