@@ -64,7 +64,7 @@ func _try_image() -> bool:
 		_img.set_anchors_preset(Control.PRESET_FULL_RECT)
 		_img.texture = tex
 		_img.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		_img.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVER
+		_img.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 		add_child(_img)
 		move_child(_img, 0)
 		# 缓慢放大 + 淡入，模拟开屏动画

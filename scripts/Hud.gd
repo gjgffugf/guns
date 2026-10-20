@@ -452,9 +452,10 @@ func _draw_crosshair() -> void:
 		crosshair.draw_circle(c, 2.0, col)
 		crosshair.draw_arc(c, 7.0, 0, TAU, 32, Color(0.2, 0.9, 0.4, 0.7), 2.0)
 		return
-	for d in [Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1)]:
-		var a := c + d * gap
-		var b := c + d * (gap + len)
+	var dirs: Array[Vector2] = [Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1)]
+	for d: Vector2 in dirs:
+		var a: Vector2 = c + d * gap
+		var b: Vector2 = c + d * (gap + len)
 		crosshair.draw_line(a, b, col, 2.5)
 	crosshair.draw_circle(c, 1.6, col)
 
@@ -465,5 +466,6 @@ func _draw_hitmark() -> void:
 	var a := lerpf(0.0, 1.0, _hit_t / 0.22) * 0.6 + 0.4
 	var col := Color(1.0, 0.25, 0.2, a) if _hit_lethal else Color(1, 1, 1, a)
 	var r := 12.0
-	for d in [Vector2(1, 1), Vector2(1, -1), Vector2(-1, 1), Vector2(-1, -1)]:
+	var dirs: Array[Vector2] = [Vector2(1, 1), Vector2(1, -1), Vector2(-1, 1), Vector2(-1, -1)]
+	for d: Vector2 in dirs:
 		hitmark.draw_line(c + d * r * 0.5, c + d * (r + 10), col, 3.0)

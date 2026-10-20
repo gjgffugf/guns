@@ -30,10 +30,6 @@ window/stretch/aspect="expand"
 
 import/blender/enabled=false
 
-[gui]
-
-theme/custom_font="res://assets/fonts/ui_font.ttf"
-
 [input]
 
 ui_accept={

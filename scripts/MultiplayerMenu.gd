@@ -44,7 +44,7 @@ func _build_bg() -> void:
 	)
 	add_child(g)
 
-func _field(label: String, value: String, hint: String) -> LineEdit:
+func _field(label: String, value: String, hint: String) -> VBoxContainer:
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 6)
 	var l := Label.new()
@@ -169,7 +169,7 @@ func _do_connect() -> void:
 		_status.text = "地址或端口不合法"
 		return
 	GameSettings.set_server(host, port)
-	GameSettings.set_name(nm)
+	GameSettings.set_player_name(nm)
 	_btn.disabled = true
 	_status.text = "正在连接 %s:%d ..." % [host, port]
 	Sfx.play("click")

@@ -15,11 +15,23 @@ var sensitivity: float = 1.0
 var invert_y: bool = false
 var master_volume: float = 0.9
 
+const FONT_PATH := "res://assets/fonts/ui_font.ttf"
+
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	_setup_font()
 	load_cfg()
 	apply_fps(target_fps)
 	AudioServer.set_bus_volume_db(0, linear_to_db(master_volume))
+
+## 挂中文字体。资源缺失时静默降级，不阻断启动。
+func _setup_font() -> void:
+	if ResourceLoader.exists(FONT_PATH):
+		var f := load(FONT_PATH) as Font
+		if f != null:
+			ThemeDB.fallback_font = f
+	else:
+		push_warning("[Settings] 字体缺失，界面将回退到默认字体: %s" % FONT_PATH)
 
 func load_cfg() -> void:
 	var f := ConfigFile.new()
@@ -50,7 +62,7 @@ func save_cfg() -> void:
 func apply_fps(value: int) -> void:
 	target_fps = value
 	Engine.max_fps = value
-	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_MODE_DISABLED)
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 	fps_changed.emit(value)
 	save_cfg()
 
@@ -59,6 +71,6 @@ func set_server(addr: String, port: int) -> void:
 	server_port = port
 	save_cfg()
 
-func set_name(v: String) -> void:
+func set_player_name(v: String) -> void:
 	player_name = v
 	save_cfg()

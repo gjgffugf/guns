@@ -3,7 +3,7 @@ extends RefCounted
 ## 临时测试资源：全部用代码搭几何体，不依赖任何外部模型文件。
 ## 后续有正式模型时，直接替换 build_soldier / build_gun 的返回值即可。
 
-const MAT_CACHE := {}
+var MAT_CACHE := {}
 
 static func mat(color: Color, rough: float = 0.85, metal: float = 0.05) -> StandardMaterial3D:
 	var key := "%s-%s-%s" % [color.to_html(), rough, metal]

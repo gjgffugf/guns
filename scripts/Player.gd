@@ -241,7 +241,9 @@ func _physics_process(delta: float) -> void:
 
 func _process(delta: float) -> void:
 	# 60Hz 物理 + 高帧率渲染：对模型做插值，144fps 下画面才跟手且平滑
-	var f := Engine.get_physics_interpolation_fraction()
+	var f := 1.0
+	if Engine.has_method("get_physics_interpolation_fraction"):
+		f = Engine.get_physics_interpolation_fraction()
 	if model.visible:
 		model.global_position = _prev_pos.lerp(_curr_pos, f)
 	_update_flash(delta)
@@ -411,16 +413,15 @@ func _update_flash(delta: float) -> void:
 			muzzle_flash.visible = false
 
 func _apply_hit(hit: Dictionary, _dir: Vector3) -> void:
-	var obj := hit["collider"]
-	var target: Node = obj
+	var target := hit.get("collider", null) as Node
 	# 命中判定往上找带 take_damage 的实体
 	while target != null and not target.has_method("take_damage"):
 		target = target.get_parent()
 	if target == null:
 		return
-	var p: Vector3 = hit["position"]
-	var local_y := p.y - target.global_position.y
-	var is_head := local_y > 1.45
+	var p := hit.get("position", Vector3.ZERO) as Vector3
+	var local_y: float = p.y - target.global_position.y
+	var is_head: bool = local_y > 1.45
 	var dmg := HEADSHOT_DAMAGE if is_head else DAMAGE
 	target.take_damage(dmg, self, is_head)
 	emit_signal("hit_confirmed", is_head)

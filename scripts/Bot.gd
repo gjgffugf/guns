@@ -178,7 +178,9 @@ func _physics_process(delta: float) -> void:
 	_curr_pos = global_position
 
 func _process(delta: float) -> void:
-	var f := Engine.get_physics_interpolation_fraction()
+	var f := 1.0
+	if Engine.has_method("get_physics_interpolation_fraction"):
+		f = Engine.get_physics_interpolation_fraction()
 	model.global_position = _prev_pos.lerp(_curr_pos, f)
 	_animate(delta)
 	if _shoot_flash_t > 0.0:
