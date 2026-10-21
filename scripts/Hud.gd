@@ -429,7 +429,7 @@ func _on_touch(e: InputEvent) -> void:
 				player.add_look(e.relative * 0.0055 * GameSettings.sensitivity)
 
 func _route_down(k: String, e: InputEvent) -> void:
-	var idx := e.get("index") if e is InputEventScreenTouch else 0
+	var idx: int = int(e.get("index", 0)) if e is InputEventScreenTouch else 0
 	if player == null:
 		return
 	match k:

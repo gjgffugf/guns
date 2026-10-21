@@ -38,14 +38,16 @@ func _draw() -> void:
 	var gstep := TICK
 	var gx := -RANGE
 	while gx <= RANGE:
-		var a := to_map.call(gx, -RANGE)
-		var b := to_map.call(gx, RANGE)
+		# Callable.call() 返回 Variant，必须显式写类型，否则 := 会推断成 Variant
+		# 而 Godot 4.3 默认把 inference_on_variant 当错误
+		var a: Vector2 = to_map.call(gx, -RANGE)
+		var b: Vector2 = to_map.call(gx, RANGE)
 		draw_line(c + a, c + b, Color(0.35, 0.48, 0.62, 0.16), 1.0)
 		gx += gstep
 	var gz := -RANGE
 	while gz <= RANGE:
-		var a := to_map.call(-RANGE, gz)
-		var b := to_map.call(RANGE, gz)
+		var a: Vector2 = to_map.call(-RANGE, gz)
+		var b: Vector2 = to_map.call(RANGE, gz)
 		draw_line(c + a, c + b, Color(0.35, 0.48, 0.62, 0.16), 1.0)
 		gz += gstep
 

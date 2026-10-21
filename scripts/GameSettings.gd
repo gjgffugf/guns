@@ -143,9 +143,10 @@ func load_cfg() -> void:
 	cross_thick = float(f.get_value("cross", "thick", cross_thick))
 	cross_size = float(f.get_value("cross", "size", cross_size))
 	cross_dot = bool(f.get_value("cross", "dot", cross_dot))
-	var cc := f.get_value("cross", "color", null)
-	if cc is Color:
-		cross_color = cc
+	# 注意：ConfigFile.get_value() 返回 Variant，这里不能写 :=
+	# （:= 会推断成 Variant，而 Godot 4.3 默认把 inference_on_variant 当错误）
+	var cc: Color = f.get_value("cross", "color", cross_color)
+	cross_color = cc
 
 	for k in CONTROL_KEYS:
 		if not f.has_section_key("ctrl", k):

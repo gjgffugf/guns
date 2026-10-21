@@ -123,3 +123,23 @@ textures/vram_compression/import_etc2_astc=true
 anti_aliasing/quality/msaa_3d=1
 environment/defaults/default_clear_color=Color(0.45, 0.55, 0.68, 1)
 lights_and_shadows/directional_shadow/soft_shadow_filter_quality=1
+
+[debug]
+
+; Godot 4.3 默认把 inference_on_variant 设为 2（= 当成错误）。
+; 只要有一处 `var x := 某Variant` 就会让整个 autoload 编译失败、构建中断。
+; 这里降为 1（只警告不阻断）：代码里该修的已经修了，
+; 留这一层是防止以后再手滑写出同类写法时把 CI 卡死。
+; 值说明：0=忽略  1=警告  2=错误
+; 注意：Godot 的 cfg 只认分号注释，不要写成 #
+gdscript/warnings/inference_on_variant=1
+gdscript/warnings/inferred_declaration=0
+gdscript/warnings/untyped_declaration=1
+gdscript/warnings/unsafe_method_access=1
+gdscript/warnings/unsafe_property_access=1
+gdscript/warnings/unsafe_cast=1
+gdscript/warnings/unsafe_call_argument=1
+gdscript/warnings/unsafe_loop_iteration=1
+gdscript/warnings/incompatible_ternary=1
+gdscript/warnings/narrowing_conversion=1
+gdscript/warnings/return_value_discarded=0

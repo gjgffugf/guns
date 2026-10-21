@@ -193,6 +193,58 @@ for dp, dn, fn in os.walk(ROOT):
 
 
 # ============================================================
+# Godot 4.3 默认把 inference_on_variant 当 ERROR：
+# `var x := <Variant>` 会让整个脚本编译失败（autoload 更是直接起不来）
+# ============================================================
+VARIANT_SRC = [
+    r"\.get_value\s*\(",      # ConfigFile.get_value()
+    r"\.get\s*\(",            # Object.get() / Dictionary.get()
+    r"\.get_meta\s*\(",       # Node.get_meta()
+    r"JSON\.parse_string\s*\(",
+    r"\.data\b",
+    r"\.call\s*\(",          # Callable.call() 同样返回 Variant
+]
+# 能产出确定类型的包装：int() / str() / float() / bool() / Color() / as 类型 / Vector2()...
+CAST_FN = re.compile(r"^\s*(int|str|float|bool|Color|Vector2|Vector3|Vector2i|Vector3i"
+                     r"|String|StringName|NodePath|PackedStringArray|Array|Dictionary)\s*\(")
+
+def _variant_inference(path, src):
+    lines = src.split("\n")
+    for i, raw in enumerate(lines, 1):
+        code = raw.split("#")[0] if "#" in raw else raw
+        m = re.search(r"\b(?:var|const)\s+(\w+)\s*:=\s*(.+)$", code)
+        if not m:
+            continue
+        name, rhs = m.group(1), m.group(2)
+        # 三元：两边类型不一致时整体也是 Variant
+        has_ternary = " if " in rhs and " else " in rhs
+        hit = [pt for pt in VARIANT_SRC if re.search(pt, rhs)]
+        if not hit and not has_ternary:
+            continue
+        # 被显式转型包住就没问题，例如 int(d.get("x", 0)) / x as Node3D
+        if CAST_FN.match(rhs) or re.search(r"\bas\s+[A-Z]\w+", rhs):
+            continue
+        # 三元两边都是同型字面量（1.0 if a else 2.0）也没问题
+        if has_ternary and not hit:
+            continue
+        errors.append(
+            f"{path}:{i} `var {name} := ...` 右侧是 Variant（{hit or '三元类型不一致'}），"
+            f"Godot 4.3 默认按错误处理 —— 改成显式类型，例如 "
+            f"`var {name}: int = int(...)` 或 `var {name} = ...`")
+
+for f in sorted(os.listdir(os.path.join(ROOT, "scripts"))):
+    if f.endswith(".gd"):
+        _variant_inference("scripts/" + f, open(os.path.join(ROOT, "scripts", f), encoding="utf-8").read())
+
+# project.godot 同样只认分号注释
+PG = os.path.join(ROOT, "project.godot")
+if os.path.isfile(PG):
+    for i, ln in enumerate(open(PG, encoding="utf-8").read().split("\n"), 1):
+        t = ln.strip()
+        if t.startswith("#"):
+            errors.append(f"project.godot:{i} 含 '#' 注释，Godot 的 cfg 只认 ';'")
+
+# ============================================================
 # export_presets.cfg 键名校验（键名写错 Godot 会静默用默认值）
 # ============================================================
 PRESET_FILE = os.path.join(ROOT, "export_presets.cfg")
