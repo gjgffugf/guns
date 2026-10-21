@@ -4,7 +4,7 @@ config_version=5
 
 config/name="破绷战场"
 config/description="BreakBind Battlefield - 移动端 FPS"
-config/version="0.1.0"
+config/version="0.1.1"
 run/main_scene="res://scenes/Splash.tscn"
 config/features=PackedStringArray("4.3", "Mobile")
 boot_splash/bg_color=Color(0.03, 0.03, 0.04, 1)
@@ -16,6 +16,9 @@ GameSettings="*res://scripts/GameSettings.gd"
 Sfx="*res://scripts/Sfx.gd"
 Trans="*res://scripts/Transition.gd"
 Net="*res://scripts/NetworkManager.gd"
+Music="*res://scripts/Music.gd"
+Loading="*res://scripts/Loading.gd"
+Updater="*res://scripts/Updater.gd"
 
 [display]
 
@@ -23,6 +26,7 @@ window/size/viewport_width=1280
 window/size/viewport_height=720
 window/size/resizable=false
 window/handheld/orientation=0
+window/vsync/vsync_mode=0
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 

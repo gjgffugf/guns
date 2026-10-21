@@ -100,25 +100,45 @@ jobs:
           echo "构建模板已安装:"
           ls android/build/
 
-      - name: 生成签名密钥（debug/release 共用）
+      - name: 生成签名密钥（100 年有效期）
+        env:
+          KS_STORE_PASS: xfangames          # 库密码
+          KS_ALIAS: xfan                    # 库名 / 别名
+          KS_KEY_PASS: games2287681747      # 密钥密码
+          KS_VALIDITY: "36500"              # 36500 天 ≈ 100 年
         run: |
           set -euo pipefail
-          # Android APK 必须签名才能安装。Godot 的 release 导出不会回退到
-          # 编辑器里的 debug keystore，必须显式提供 release keystore。
-          # 密码只用字母数字，避免特殊字符导致 jarsigner 报错。
           KS="${HOME}/breakbind.keystore"
-          keytool -genkeypair -v \
-            -keystore "$KS" \
-            -alias breakbind \
-            -storepass breakbind -keypass breakbind \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=BreakBind,O=xfan,C=CN"
-          # 校验：别名和密码能对上就直接继续，对不上立刻失败，别等到最后
-          keytool -list -v -keystore "$KS" -alias breakbind -storepass breakbind \
-            | grep -q "Alias name: breakbind"
-          echo "KEYSTORE_PATH=$KS" >> "$GITHUB_ENV"
-          echo "keystore 就绪: $KS"
+          rm -f "$KS"
 
+          if [ "$KS_STORE_PASS" = "$KS_KEY_PASS" ]; then
+            keytool -genkeypair -v -keystore "$KS" -alias "$KS_ALIAS" \
+              -storepass "$KS_STORE_PASS" -keypass "$KS_KEY_PASS" \
+              -keyalg RSA -keysize 2048 -validity "$KS_VALIDITY" \
+              -dname "CN=xfan,OU=xfan.games,O=xfan Games,L=GZ,ST=GD,C=CN"
+            EFFECTIVE="$KS_STORE_PASS"
+          else
+            # Godot 的 Android 导出只有「一个」密码字段，会同时用作
+            # --ks-pass 和 --key-pass，所以两个口令必须一致。
+            # 这里先按你给的两个口令建成 JKS，再把密钥口令对齐到库口令。
+            keytool -genkeypair -v -storetype JKS -keystore "$KS" \
+              -alias "$KS_ALIAS" \
+              -storepass "$KS_STORE_PASS" -keypass "$KS_KEY_PASS" \
+              -keyalg RSA -keysize 2048 -validity "$KS_VALIDITY" \
+              -dname "CN=xfan,OU=xfan.games,O=xfan Games,L=GZ,ST=GD,C=CN"
+            keytool -keypasswd -keystore "$KS" -alias "$KS_ALIAS" \
+              -storepass "$KS_STORE_PASS" -keypass "$KS_KEY_PASS" \
+              -new "$KS_STORE_PASS"
+            EFFECTIVE="$KS_STORE_PASS"
+          fi
+
+          # 立刻校验，口令不对就当场失败
+          keytool -list -v -keystore "$KS" -alias "$KS_ALIAS" -storepass "$EFFECTIVE" \
+            | grep -q "Alias name: $KS_ALIAS"
+          echo "KEYSTORE_PATH=$KS" >> "$GITHUB_ENV"
+          echo "KEYSTORE_PASS=$EFFECTIVE" >> "$GITHUB_ENV"
+          echo "KEYSTORE_ALIAS=$KS_ALIAS" >> "$GITHUB_ENV"
+          echo "keystore 就绪: $KS (alias=$KS_ALIAS)"
       - name: 写入编辑器配置（SDK / JDK / 签名）
         run: |
           set -euo pipefail
@@ -131,8 +151,8 @@ jobs:
           export/android/android_sdk_path = "${ANDROID_HOME}"
           export/android/java_sdk_path = "${JAVA_HOME}"
           export/android/debug_keystore = "${HOME}/breakbind.keystore"
-          export/android/debug_keystore_user = "breakbind"
-          export/android/debug_keystore_pass = "breakbind"
+          export/android/debug_keystore_user = "${KEYSTORE_ALIAS}"
+          export/android/debug_keystore_pass = "${KEYSTORE_PASS}"
           export/android/shutdown_adb_on_exit = false
           EOF
           sed -i 's/^          //' "${HOME}/.config/godot/editor_settings-${GODOT_VERSION}.tres"
@@ -193,12 +213,15 @@ jobs:
           echo "构建类型: $BT   输出: $OUT"
 
           # 必须用绝对路径；且 keystore 密码与 key 密码一致
-          export GODOT_ANDROID_KEYSTORE_RELEASE_PATH="${KEYSTORE_PATH:-$HOME/breakbind.keystore}"
-          export GODOT_ANDROID_KEYSTORE_RELEASE_USER="breakbind"
-          export GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD="breakbind"
-          export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="${KEYSTORE_PATH:-$HOME/breakbind.keystore}"
-          export GODOT_ANDROID_KEYSTORE_DEBUG_USER="breakbind"
-          export GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD="breakbind"
+          KS="${KEYSTORE_PATH:-$HOME/breakbind.keystore}"
+          KPASS="${KEYSTORE_PASS:-xfangames}"
+          KALIAS="${KEYSTORE_ALIAS:-xfan}"
+          export GODOT_ANDROID_KEYSTORE_RELEASE_PATH="$KS"
+          export GODOT_ANDROID_KEYSTORE_RELEASE_USER="$KALIAS"
+          export GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD="$KPASS"
+          export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="$KS"
+          export GODOT_ANDROID_KEYSTORE_DEBUG_USER="$KALIAS"
+          export GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD="$KPASS"
           echo "release keystore: $GODOT_ANDROID_KEYSTORE_RELEASE_PATH"
           test -f "$GODOT_ANDROID_KEYSTORE_RELEASE_PATH" \
             || { echo "::error::keystore 不存在"; exit 1; }

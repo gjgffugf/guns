@@ -1,6 +1,6 @@
 class_name Player
 extends CharacterBody3D
-## 本地玩家：移动 / 跳跃 / 疾跑 / 蹲下 / 趴下 / 开镜 / 射击 / 血量 / 弹药。
+## 本地玩家：移动 / 跳跃 / 疾跑 / 蹲下 / 趴下 / 开镜 / 射击 / 近战 / 治疗物。
 ## 模型、枪械均由 ModelFactory 用代码生成（临时资源）。
 
 signal hp_changed(hp: float, max_hp: float)
@@ -9,8 +9,15 @@ signal stance_changed(stance: int)
 signal died(killer: String)
 signal respawned()
 signal hit_confirmed(lethal: bool)
+signal damaged(amount: float, from_name: String)
+signal weapon_changed(w: int)
+signal items_changed()
+signal item_state_changed(using: int, left: float, total: float)
+signal respawn_tick(sec: int)
 
 enum Stance { STAND, CROUCH, PRONE }
+enum Weapon { RANGED, MELEE }
+enum Item { BANDAGE, MEDKIT, DRINK }
 
 # ---- 移动参数 ----
 const WALK_SPEED := 5.4
@@ -37,13 +44,34 @@ const RELOAD_TIME := 1.9
 const DAMAGE := 25.0
 const HEADSHOT_DAMAGE := 58.0
 const RANGE := 300.0
-const BASE_SPREAD := 0.028        # 腰射基础散布（弧度）
+const BASE_SPREAD := 0.028
 const ADS_SPREAD := 0.002
 const MOVE_SPREAD := 0.030
 const RECOIL_PITCH := 0.013
 const RECOIL_YAW := 0.004
 const FOV_HIP := 62.0
 const FOV_ADS := 38.0
+
+# ---- 近战：刀，伤害 10，攻速为枪的 40%（间隔 = 枪间隔 / 0.4）----
+const MELEE_DAMAGE := 10.0
+const MELEE_RANGE := 2.6
+const MELEE_SPEED_MUL := 0.4
+const MELEE_INTERVAL := FIRE_INTERVAL / MELEE_SPEED_MUL
+
+# ---- 治疗物 ----
+const ITEM_NAMES := {
+	Item.BANDAGE: "破损的绷带",
+	Item.MEDKIT: "布满灰的急救包",
+	Item.DRINK: "冰冰冰",
+}
+const ITEM_TIME := {Item.BANDAGE: 5.0, Item.MEDKIT: 7.0, Item.DRINK: 4.0}
+const ITEM_START := {Item.BANDAGE: 3, Item.MEDKIT: 1, Item.DRINK: 2}
+const BANDAGE_HEAL := 40.0
+# 能量饮料：+10% 移速 / -20% 受伤 / +10% 输出，持续 15 秒
+const DRINK_DURATION := 15.0
+const DRINK_SPEED_MUL := 1.10
+const DRINK_TAKEN_MUL := 0.80
+const DRINK_DEALT_MUL := 1.10
 
 var hp: float = MAX_HP
 var alive: bool = true
@@ -55,20 +83,29 @@ var reserve: int = RESERVE_SIZE
 var kills: int = 0
 var deaths: int = 0
 var display_name: String = "你"
+var weapon: int = Weapon.RANGED
+
+# 治疗物
+var selected_item: int = Item.BANDAGE
+var _items: Dictionary = {}
+var _using_item: int = -1
+var _use_t: float = 0.0
+var _use_total: float = 0.0
+var _buff_t: float = 0.0
 
 # 由外部（键盘 / 虚拟摇杆 / HUD 按钮）写入
 var move_axis: Vector2 = Vector2.ZERO
-var jump_buffer_t: float = 0.0      # 跳跃缓冲：落地前按下也算数
-var coyote_t: float = 0.0           # 土狼时间：刚离地还能补一跳
+var jump_buffer_t: float = 0.0
+var coyote_t: float = 0.0
 const JUMP_BUFFER := 0.13
 const COYOTE_TIME := 0.10
 var want_fire: bool = false
-var touch_ads: bool = false        # HUD「开镜」按钮
-var touch_sprint: bool = false     # HUD「疾跑」按钮
+var touch_ads: bool = false
+var touch_sprint: bool = false
 
-var _kb_ads: bool = false           # 鼠标右键 / 键盘
+var _kb_ads: bool = false
 var _kb_sprint: bool = false
-var _look := Vector2.ZERO           # 待消费的视角增量
+var _look := Vector2.ZERO
 var _yaw: float = 0.0
 var _pitch: float = 0.0
 var _fire_cd: float = 0.0
@@ -76,15 +113,18 @@ var _reloading: float = 0.0
 var _spread: float = BASE_SPREAD
 var _bob_t: float = 0.0
 var _respawn_t: float = 0.0
+var _respawn_last: int = -1
 var respawn_point: Vector3 = Vector3.INF
 var _recoil := Vector2.ZERO
 var _recoil_vel := Vector2.ZERO
 var _last_damage_from: String = ""
+var _anim_t: float = 0.0
 
 var head: Node3D
 var camera: Camera3D
 var weapon_holder: Node3D
-var weapon: Node3D
+var _gun_model: Node3D
+var _knife_model: Node3D
 var muzzle: Marker3D
 var ray: RayCast3D
 var shape: CollisionShape3D
@@ -101,6 +141,9 @@ var _curr_pos: Vector3
 
 func _ready() -> void:
 	add_to_group("entity")
+	_items = {}
+	for k in ITEM_START:
+		_items[k] = ITEM_START[k]
 	_build()
 
 func _build() -> void:
@@ -115,9 +158,7 @@ func _build() -> void:
 	shape.position = Vector3(0, cs.height / 2.0, 0)
 	add_child(shape)
 
-	# 视觉模型（第一人称下只显示手臂与枪，模型本体隐藏）
-	model = ModelFactory.build_soldier(Color(0.30, 0.42, 0.34), Color(0.22, 0.30, 0.25),
-			Color(0.30, 0.34, 0.28))
+	model = ModelFactory.build_soldier()
 	model.visible = false
 	add_child(model)
 	_rig = model.get_meta("rig")
@@ -151,9 +192,15 @@ func _build() -> void:
 	weapon_holder.name = "WeaponHolder"
 	weapon_holder.position = Vector3(0.17, -0.15, -0.32)
 	camera.add_child(weapon_holder)
-	weapon = ModelFactory.build_gun()
-	weapon_holder.add_child(weapon)
-	muzzle = weapon.get_meta("muzzle")
+
+	_gun_model = ModelFactory.build_gun()
+	_gun_model.name = "Gun"
+	weapon_holder.add_child(_gun_model)
+	_knife_model = ModelFactory.build_knife()
+	_knife_model.name = "Knife"
+	_knife_model.visible = false
+	weapon_holder.add_child(_knife_model)
+	muzzle = _gun_model.get_meta("muzzle")
 
 	muzzle_flash = MeshInstance3D.new()
 	var qm := QuadMesh.new()
@@ -170,6 +217,104 @@ func _build() -> void:
 
 	_prev_pos = global_position
 	_curr_pos = global_position
+	_apply_weapon_visual()
+
+# ------------------------------------------------------------------ 武器
+func toggle_weapon() -> void:
+	if _using_item >= 0:
+		return
+	weapon = Weapon.MELEE if weapon == Weapon.RANGED else Weapon.RANGED
+	Sfx.play("click", -6.0)
+	_apply_weapon_visual()
+	emit_signal("weapon_changed", weapon)
+
+func _apply_weapon_visual() -> void:
+	if _gun_model == null or _knife_model == null:
+		return
+	var is_melee := weapon == Weapon.MELEE
+	_gun_model.visible = not is_melee
+	_knife_model.visible = is_melee
+	muzzle = (_knife_model if is_melee else _gun_model).get_meta("muzzle")
+	if muzzle_flash != null:
+		muzzle_flash.reparent(muzzle)
+		muzzle_flash.position = Vector3.ZERO
+	# 近战不能开镜
+	if is_melee:
+		ads = false
+		touch_ads = false
+		_kb_ads = false
+
+# ------------------------------------------------------------------ 治疗物
+func item_name(i: int) -> String:
+	return ITEM_NAMES.get(i, "物品")
+
+func item_count(i: int) -> int:
+	return int(_items.get(i, 0))
+
+func select_item(i: int) -> void:
+	if selected_item == i:
+		return
+	selected_item = i
+	emit_signal("items_changed")
+
+func use_selected_item() -> void:
+	if not alive or _using_item >= 0:
+		return
+	var i := selected_item
+	if item_count(i) <= 0:
+		return
+	_using_item = i
+	_use_total = float(ITEM_TIME.get(i, 5.0))
+	_use_t = _use_total
+	want_fire = false
+	Sfx.play("click", -4.0)
+	emit_signal("item_state_changed", _using_item, _use_t, _use_total)
+
+func cancel_item() -> void:
+	if _using_item < 0:
+		return
+	_using_item = -1
+	_use_t = 0.0
+	Sfx.play("click", -8.0)
+	emit_signal("item_state_changed", -1, 0.0, 0.0)
+
+func _finish_item() -> void:
+	var i := _using_item
+	_using_item = -1
+	_use_t = 0.0
+	_items[i] = maxi(0, item_count(i) - 1)
+	match i:
+		Item.BANDAGE:
+			hp = minf(MAX_HP, hp + BANDAGE_HEAL)
+			emit_signal("hp_changed", hp, MAX_HP)
+		Item.MEDKIT:
+			hp = MAX_HP
+			emit_signal("hp_changed", hp, MAX_HP)
+		Item.DRINK:
+			_buff_t = DRINK_DURATION
+	emit_signal("item_state_changed", -1, 0.0, 0.0)
+	emit_signal("items_changed")
+	Sfx.play("click", -2.0)
+	# 用完了就自动切到还有存货的那个
+	if item_count(selected_item) <= 0:
+		for k in ITEM_START:
+			if item_count(k) > 0:
+				selected_item = k
+				break
+
+func _update_items(delta: float) -> void:
+	if _buff_t > 0.0:
+		_buff_t -= delta
+	if _using_item < 0:
+		return
+	_use_t -= delta
+	if _use_t <= 0.0:
+		_finish_item()
+	else:
+		emit_signal("item_state_changed", _using_item, _use_t, _use_total)
+
+func is_using_item() -> bool:
+	return _using_item >= 0
 
 # ------------------------------------------------------------------ 输入
 func _unhandled_input(e: InputEvent) -> void:
@@ -182,13 +327,13 @@ func _unhandled_input(e: InputEvent) -> void:
 			MOUSE_BUTTON_LEFT:
 				want_fire = true
 			MOUSE_BUTTON_RIGHT:
-				_kb_ads = true
+				# 开镜改为点击切换，不再长按
+				if weapon == Weapon.RANGED:
+					_kb_ads = not _kb_ads
 	elif e is InputEventMouseButton and not e.pressed:
 		match e.button_index:
 			MOUSE_BUTTON_LEFT:
 				want_fire = false
-			MOUSE_BUTTON_RIGHT:
-				_kb_ads = false
 	elif e is InputEventKey and e.pressed and not e.echo:
 		match e.physical_keycode:
 			KEY_C:
@@ -199,6 +344,12 @@ func _unhandled_input(e: InputEvent) -> void:
 				start_reload()
 			KEY_SPACE:
 				request_jump()
+			KEY_V:
+				toggle_weapon()
+			KEY_F:
+				use_selected_item()
+			KEY_Q:
+				select_item((selected_item + 1) % ITEM_START.size())
 			KEY_SHIFT:
 				pass
 
@@ -208,8 +359,6 @@ func add_look(d: Vector2) -> void:
 func set_look_axis(v: Vector2) -> void:
 	_look += v
 
-## 请求起跳。HUD 的跳跃按钮在“按下”瞬间就调用它，
-## 不用等松手，所以能边推摇杆边跳。
 func request_jump() -> void:
 	if not alive:
 		return
@@ -218,9 +367,6 @@ func request_jump() -> void:
 func _read_keyboard() -> void:
 	if OS.has_feature("pc"):
 		move_axis = Input.get_vector("mv_left", "mv_right", "mv_forward", "mv_back")
-	else:
-		# 移动端保留摇杆写入的 move_axis
-		pass
 	if Input.is_action_just_pressed("mv_jump"):
 		request_jump()
 	_kb_sprint = Input.is_action_pressed("mv_sprint")
@@ -232,6 +378,10 @@ func _physics_process(delta: float) -> void:
 	_prev_pos = _curr_pos
 	if not alive:
 		_respawn_t -= delta
+		var sec := int(ceili(_respawn_t))
+		if sec != _respawn_last and sec > 0:
+			_respawn_last = sec
+			emit_signal("respawn_tick", sec)
 		if _respawn_t <= 0.0:
 			do_respawn(respawn_point)
 		velocity = Vector3.ZERO
@@ -240,7 +390,8 @@ func _physics_process(delta: float) -> void:
 		return
 
 	_read_keyboard()
-	ads = _kb_ads or touch_ads
+	_update_items(delta)
+	ads = (_kb_ads or touch_ads) and weapon == Weapon.RANGED
 	_update_stance(delta)
 	_update_look()
 	_update_move(delta)
@@ -250,12 +401,15 @@ func _physics_process(delta: float) -> void:
 	_curr_pos = global_position
 
 func _process(delta: float) -> void:
-	# 60Hz 物理 + 高帧率渲染：对模型做插值，144fps 下画面才跟手且平滑
 	var f := 1.0
 	if Engine.has_method("get_physics_interpolation_fraction"):
 		f = Engine.get_physics_interpolation_fraction()
 	if model.visible:
 		model.global_position = _prev_pos.lerp(_curr_pos, f)
+	# 跑动动画（第一人称下模型隐藏，但动画状态保持更新）
+	var planar := Vector2(velocity.x, velocity.z).length()
+	_anim_t += delta * planar
+	ModelFactory.animate_rig(model, planar, _anim_t, sprinting)
 	_update_flash(delta)
 
 func _update_look() -> void:
@@ -264,7 +418,6 @@ func _update_look() -> void:
 		_pitch = clampf(_pitch + _look.y, deg_to_rad(-88.0), deg_to_rad(88.0))
 		_look = Vector2.ZERO
 	rotation.y = _yaw
-	# 后坐力叠加
 	head.rotation.x = _pitch + _recoil.x
 	rotation.y = _yaw + _recoil.y
 
@@ -277,14 +430,18 @@ func _update_move(delta: float) -> void:
 		spd *= CROUCH_MUL
 	elif stance == Stance.PRONE:
 		spd *= PRONE_MUL
-	else:
-		if sprinting:
-			spd *= SPRINT_MUL
+	elif sprinting:
+		spd *= SPRINT_MUL
 	if ads:
 		spd *= ADS_MUL
-	# 趴下/开镜不能疾跑
-	sprinting = (_kb_sprint or touch_sprint) and move_axis.length() > 0.3
-	if ads or stance != Stance.STAND or _reloading > 0.0:
+	if _buff_t > 0.0:
+		spd *= DRINK_SPEED_MUL
+
+	# 疾跑：摇杆推到顶自动触发，也可以按住按钮 / Shift
+	var len_axis := move_axis.length()
+	var auto := GameSettings.auto_sprint and move_axis.y <= -0.72 and len_axis > 0.8
+	sprinting = (auto or _kb_sprint or touch_sprint) and len_axis > 0.3
+	if ads or stance != Stance.STAND or _reloading > 0.0 or _using_item >= 0:
 		sprinting = false
 
 	var target := wish * spd
@@ -292,8 +449,6 @@ func _update_move(delta: float) -> void:
 	velocity.x = move_toward(velocity.x, target.x, a * spd * delta * 0.6 + a * delta)
 	velocity.z = move_toward(velocity.z, target.z, a * spd * delta * 0.6 + a * delta)
 
-	# 跳跃缓冲与土狼时间：边跑边跳时手感才跟得上，
-	# 而且水平速度完全不重置，起跳后仍可继续控制方向
 	jump_buffer_t -= delta
 	if is_on_floor():
 		coyote_t = COYOTE_TIME
@@ -332,28 +487,35 @@ func set_stance(s: int) -> void:
 
 func _update_weapon(delta: float) -> void:
 	_fire_cd -= delta
-	# 后坐力回正（弹簧）
 	_recoil_vel += -_recoil * 120.0 * delta
 	_recoil_vel *= exp(-14.0 * delta)
 	_recoil += _recoil_vel * delta
 
-	# 开镜：FOV 与枪械位置
+	var is_melee := weapon == Weapon.MELEE
 	var tgt_fov := FOV_ADS if ads else FOV_HIP
 	camera.fov = lerpf(camera.fov, tgt_fov, 1.0 - exp(-18.0 * delta))
 	var tgt_pos := Vector3(0.0, -0.062, -0.22) if ads else Vector3(0.17, -0.15, -0.32)
 	var tgt_rot := Vector3.ZERO if ads else Vector3(0, deg_to_rad(2.5), 0)
+	if is_melee:
+		tgt_pos = Vector3(0.22, -0.20, -0.34)
+		tgt_rot = Vector3(deg_to_rad(-12), deg_to_rad(14), 0)
 	weapon_holder.position = weapon_holder.position.lerp(tgt_pos, 1.0 - exp(-16.0 * delta))
 	weapon_holder.rotation = weapon_holder.rotation.lerp(tgt_rot, 1.0 - exp(-16.0 * delta))
 
-	# 散布
+	# 开镜时把枪械模型整个藏掉，只留 HUD 上的倍镜圆圈，避免挡视野
+	weapon_holder.visible = not ads
+
 	var planar_speed := Vector2(velocity.x, velocity.z).length()
-	var s := ADS_SPREAD if ads else BASE_SPREAD
-	s += MOVE_SPREAD * clampf(planar_speed / WALK_SPEED, 0.0, 1.6)
-	if not is_on_floor():
-		s += 0.035
-	if sprinting:
-		s += 0.02
-	_spread = lerpf(_spread, s, 1.0 - exp(-10.0 * delta))
+	if is_melee:
+		_spread = lerpf(_spread, 0.0, 1.0 - exp(-10.0 * delta))
+	else:
+		var s := ADS_SPREAD if ads else BASE_SPREAD
+		s += MOVE_SPREAD * clampf(planar_speed / WALK_SPEED, 0.0, 1.6)
+		if not is_on_floor():
+			s += 0.035
+		if sprinting:
+			s += 0.02
+		_spread = lerpf(_spread, s, 1.0 - exp(-10.0 * delta))
 
 	if _reloading > 0.0:
 		_reloading -= delta
@@ -361,10 +523,17 @@ func _update_weapon(delta: float) -> void:
 			_finish_reload()
 		return
 
-	if want_fire and _fire_cd <= 0.0 and mag > 0:
-		_fire()
-	elif want_fire and mag == 0 and _reloading <= 0.0:
-		start_reload()
+	# 使用治疗物期间不能开枪
+	if _using_item >= 0:
+		return
+
+	if want_fire and _fire_cd <= 0.0:
+		if is_melee:
+			_melee()
+		elif mag > 0:
+			_fire()
+		elif _reloading <= 0.0:
+			start_reload()
 
 func _update_bob(delta: float) -> void:
 	var planar_speed := Vector2(velocity.x, velocity.z).length()
@@ -378,11 +547,19 @@ func _update_bob(delta: float) -> void:
 		head.position.y += sin(_bob_t * 2.0) * amp * 0.12
 
 func start_reload() -> void:
-	if _reloading > 0.0 or mag == MAG_SIZE or reserve <= 0:
+	if weapon != Weapon.RANGED:
+		return
+	if _reloading > 0.0 or mag == MAG_SIZE or reserve <= 0 or _using_item >= 0:
 		return
 	_reloading = RELOAD_TIME
 	Sfx.play("reload", -4.0)
 	emit_signal("ammo_changed", mag, reserve)
+
+func is_reloading() -> bool:
+	return _reloading > 0.0
+
+func reload_left() -> float:
+	return maxf(0.0, _reloading)
 
 func _finish_reload() -> void:
 	var need := MAG_SIZE - mag
@@ -391,14 +568,13 @@ func _finish_reload() -> void:
 	reserve -= got
 	emit_signal("ammo_changed", mag, reserve)
 
-# ------------------------------------------------------------------ 射击
+# ------------------------------------------------------------------ 射击 / 近战
 func _fire() -> void:
 	_fire_cd = FIRE_INTERVAL
 	mag -= 1
 	emit_signal("ammo_changed", mag, reserve)
 	Sfx.play("shoot", -3.0, randf_range(0.94, 1.06))
 
-	# 后坐力
 	_recoil_vel.x -= RECOIL_PITCH * (0.6 if ads else 1.0) * 60.0
 	_recoil_vel.y += RECOIL_YAW * randf_range(-1.0, 1.0) * 60.0
 
@@ -407,7 +583,6 @@ func _fire() -> void:
 	muzzle_flash.scale = Vector3.ONE * randf_range(0.8, 1.25)
 	_flash_t = 0.045
 
-	# 射线方向（含散布）
 	var dir := -camera.global_transform.basis.z
 	if _spread > 0.0:
 		var ang := randf() * TAU
@@ -423,8 +598,19 @@ func _fire() -> void:
 	var end := from + dir * RANGE
 	if not hit.is_empty():
 		end = hit["position"]
-		_apply_hit(hit, dir)
+		_apply_hit(hit, dir, DAMAGE, HEADSHOT_DAMAGE)
 	_spawn_tracer(from, end)
+
+func _melee() -> void:
+	_fire_cd = MELEE_INTERVAL
+	Sfx.play("shoot", -10.0, 0.72)
+	var space := get_world_3d().direct_space_state
+	var from := camera.global_position
+	var dir := -camera.global_transform.basis.z
+	var q := PhysicsRayQueryParameters3D.create(from, from + dir * MELEE_RANGE, 1 | 2, [self])
+	var hit := space.intersect_ray(q)
+	if not hit.is_empty():
+		_apply_hit(hit, dir, MELEE_DAMAGE, MELEE_DAMAGE)
 
 func _update_flash(delta: float) -> void:
 	if _flash_t > 0.0:
@@ -432,9 +618,8 @@ func _update_flash(delta: float) -> void:
 		if _flash_t <= 0.0:
 			muzzle_flash.visible = false
 
-func _apply_hit(hit: Dictionary, _dir: Vector3) -> void:
+func _apply_hit(hit: Dictionary, _dir: Vector3, dmg_body: float, dmg_head: float) -> void:
 	var target := hit.get("collider", null) as Node
-	# 命中判定往上找带 take_damage 的实体
 	while target != null and not target.has_method("take_damage"):
 		target = target.get_parent()
 	if target == null:
@@ -442,7 +627,9 @@ func _apply_hit(hit: Dictionary, _dir: Vector3) -> void:
 	var p := hit.get("position", Vector3.ZERO) as Vector3
 	var local_y: float = p.y - target.global_position.y
 	var is_head: bool = local_y > 1.45
-	var dmg := HEADSHOT_DAMAGE if is_head else DAMAGE
+	var dmg := dmg_head if is_head else dmg_body
+	if _buff_t > 0.0:
+		dmg *= DRINK_DEALT_MUL
 	target.take_damage(dmg, self, is_head)
 	emit_signal("hit_confirmed", is_head)
 
@@ -473,11 +660,18 @@ func _spawn_tracer(from: Vector3, to: Vector3) -> void:
 func take_damage(amount: float, from: Node = null, _is_head: bool = false) -> void:
 	if not alive:
 		return
-	hp = maxf(0.0, hp - amount)
+	var real := amount
+	if _buff_t > 0.0:
+		real *= DRINK_TAKEN_MUL
+	hp = maxf(0.0, hp - real)
 	_last_damage_from = (from.display_name if from is Player or from is Bot else "战场") \
 			if from != null else "战场"
 	emit_signal("hp_changed", hp, MAX_HP)
+	emit_signal("damaged", real, _last_damage_from)
 	Sfx.play("hurt", -3.0)
+	# 受伤会打断使用中的治疗物
+	if _using_item >= 0:
+		cancel_item()
 	if hp <= 0.0:
 		_on_die()
 
@@ -485,10 +679,12 @@ func _on_die() -> void:
 	alive = false
 	deaths += 1
 	want_fire = false
+	_using_item = -1
 	_respawn_t = 3.0
+	_respawn_last = -1
+	emit_signal("item_state_changed", -1, 0.0, 0.0)
 	emit_signal("died", _last_damage_from)
 
-## 外部在 died 时调用，指定 3 秒后的重生位置
 func queue_respawn(at: Vector3) -> void:
 	respawn_point = at
 
@@ -498,9 +694,13 @@ func do_respawn(at: Vector3 = Vector3.INF) -> void:
 	alive = true
 	mag = MAG_SIZE
 	reserve = RESERVE_SIZE
+	_buff_t = 0.0
 	set_stance(Stance.STAND)
 	ads = false
+	_kb_ads = false
+	touch_ads = false
 	velocity = Vector3.ZERO
+	_respawn_last = -1
 	if at == Vector3.INF:
 		var rng := RandomNumberGenerator.new()
 		rng.randomize()

@@ -9,6 +9,7 @@ var hud: Hud
 var _remote: Dictionary = {}
 var _spawn_points: Array[Vector3] = []
 var _bots: Array[Bot] = []
+var _total_kills: int = 0
 
 func _ready() -> void:
 	_build_world()
@@ -74,20 +75,16 @@ func _build_player() -> void:
 	player.global_position = _spawn_points[randi() % _spawn_points.size()]
 	player.died.connect(func(_k): player.queue_respawn(_pick_spawn()))
 
+## 多人模式不生成陪练人机：联机里只应该有真人，服务端也不跑 AI。
 func _build_bots() -> void:
-	var b := Bot.new()
-	b.name = "Bot1"
-	b.display_name = "陪练人机"
-	b.difficulty = 0.5
-	add_child(b)
-	b.global_position = _spawn_points[1]
-	b.died.connect(func(nm): hud.push_kill("击倒 %s" % nm))
-	_bots.append(b)
+	pass
 
 func _build_hud() -> void:
 	hud = Hud.new()
 	add_child(hud)
 	hud.bind_player(player)
+	hud.set_minimap_enabled(true)
+	_refresh_score()
 	hud.back_pressed.connect(func():
 		Sfx.play("click")
 		if OS.has_feature("pc"):
@@ -146,6 +143,8 @@ func _handle_event(e: Dictionary) -> void:
 		"kill":
 			var a := int(e.get("a", -1))
 			var b := int(e.get("b", -1))
+			_total_kills += 1
+			_refresh_score()
 			var an := _name_of(a)
 			var bn := _name_of(b)
 			hud.push_kill("%s 击倒 %s" % [an, bn])
@@ -157,6 +156,11 @@ func _handle_event(e: Dictionary) -> void:
 			hud.push_kill("%s 加入战场" % str(e.get("n", "玩家")))
 		"leave":
 			hud.push_kill("%s 离开战场" % str(e.get("n", "玩家")))
+
+## 多人不限时，只显示全场总击杀数
+func _refresh_score() -> void:
+	if hud != null:
+		hud.set_score("总击杀 %d" % _total_kills)
 
 func _name_of(id: int) -> String:
 	if id == Net.my_id:

@@ -37,6 +37,7 @@ var _seen_t: float = 0.0
 var _respawn_t: float = 0.0
 var _think: float = 0.0
 var _bob: float = 0.0
+var _anim_t: float = 0.0
 var _shoot_flash_t: float = 0.0
 
 var model: Node3D
@@ -71,8 +72,7 @@ func _build() -> void:
 	shape.position = Vector3(0, 0.9, 0)
 	add_child(shape)
 
-	model = ModelFactory.build_soldier(Color(0.52, 0.28, 0.24), Color(0.36, 0.20, 0.18),
-			Color(0.42, 0.24, 0.20))
+	model = ModelFactory.build_soldier()
 	add_child(model)
 	_rig = model.get_meta("rig")
 	_legs = model.get_meta("legs")
@@ -178,6 +178,8 @@ func _physics_process(delta: float) -> void:
 	_curr_pos = global_position
 
 func _process(delta: float) -> void:
+	# 血条每帧同步一次，避免扣血后条还停在旧血量上
+	_update_hp_bar()
 	var f := 1.0
 	if Engine.has_method("get_physics_interpolation_fraction"):
 		f = Engine.get_physics_interpolation_fraction()
@@ -329,22 +331,8 @@ func _animate(delta: float) -> void:
 	if not alive:
 		return
 	var planar := Vector2(velocity.x, velocity.z).length()
-	if planar > 0.4:
-		_bob += delta * planar * 2.2
-		var sw := sin(_bob) * 0.55 * clampf(planar / WALK, 0.3, 1.4)
-		if _legs is Node3D:
-			for c in _legs.get_children():
-				c.rotation.x = sw if c.position.x < 0 else -sw
-		if _arm_l != null:
-			_arm_l.rotation.x = -sw * 0.6
-		if _arm_r != null:
-			_arm_r.rotation.x = sw * 0.35
-	else:
-		if _legs is Node3D:
-			for c in _legs.get_children():
-				c.rotation.x = lerpf(c.rotation.x, 0.0, 1.0 - exp(-8.0 * delta))
-		if _arm_l != null:
-			_arm_l.rotation.x = lerpf(_arm_l.rotation.x, 0.0, 1.0 - exp(-8.0 * delta))
+	_anim_t += delta * planar
+	ModelFactory.animate_rig(model, planar, _anim_t, false)
 	# 开火时手臂端平
 	if state == S.FIRE and _arm_r != null:
 		_arm_r.rotation.x = lerpf(_arm_r.rotation.x, deg_to_rad(-72), 1.0 - exp(-12.0 * delta))

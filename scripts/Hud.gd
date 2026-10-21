@@ -1,14 +1,15 @@
 class_name Hud
 extends CanvasLayer
-## 战斗 HUD：准星 / 血条 / 弹药 / FPS / 命中标记 + 移动端虚拟摇杆与动作按钮。
+## 战斗 HUD（横屏 1280x720 基准）：
+## 准星 / 倍镜 / 血条 / 弹药 / FPS / 命中标记 / 受伤闪烁 / 雷达
+## + 虚拟摇杆、动作按钮、治疗物、武器切换。
+## 所有触摸控件的位置 / 大小 / 透明度由 GameSettings 驱动，可在设置里自定义。
 
 signal back_pressed()
 
-const BTN := 92.0
-const STICK_R := 82.0
-
 var player: Player
 var fps_label: Label
+var ping_label: Label
 var hp_bar: ProgressBar
 var hp_text: Label
 var ammo_label: Label
@@ -17,36 +18,51 @@ var hitmark: Control
 var notice: Label
 var kill_feed: VBoxContainer
 var stance_label: Label
-var ping_label: Label
+var score_label: Label
+var reload_tip: Label
+var minimap: Minimap
 
+# ---- 状态 ----
 var _spread_px: float = 12.0
 var _hit_t: float = 0.0
 var _hit_lethal: bool = false
 var _fps_acc: float = 0.0
-var _fps_val: float = 60.0
+var _flash_t: float = 0.0          # 受伤时屏幕边框红闪
+var _hp_flash_t: float = 0.0       # 血条红闪
+var _ads_on: bool = false          # 开镜为「点击切换」
+var _edit_preview: bool = false    # 控件编辑器预览模式（不响应游戏输入）
 
-# 触摸状态
+# ---- 触摸 ----
+var _touch: Control
 var _stick_idx: int = -1
 var _stick_vec: Vector2 = Vector2.ZERO
 var _stick_base: Vector2 = Vector2.ZERO
-var _stick_knob: Control
 var _stick_area: Control
+var _stick_knob: Control
 var _look_idx: int = -1
+var _fire_idx: int = -1
+var _btns: Dictionary = {}
 
-var _btn_fire: Button
-var _btn_ads: Button
-var _btn_jump: Button
-var _btn_crouch: Button
-var _btn_prone: Button
-var _btn_sprint: Button
-var _btn_reload: Button
+# ---- 治疗物 ----
+var _heal_root: Control
+var _heal_circle: Button
+var _heal_arrow: Button
+var _heal_list: PanelContainer
+var _heal_open: bool = false
+var _use_lbl: Label
+var _use_bar: ProgressBar
+var _cancel_btn: Button
 
-var _sprint_on: bool = false
-var _ads_held: bool = false
+# ---- 倍镜 ----
+var _scope: Control
+var _scope_tex: ImageTexture
+var _damage_layer: Control
 
-# ------------------------------------------------------------------ 布局
-## 直接写锚点与偏移，不用 set_anchors_preset —— 后者在不同屏幕比例下
-## 对 size/position 的处理有歧义，横屏切换后容易算错位置。
+func _ready() -> void:
+	layer = 10
+	_build()
+
+# ------------------------------------------------------------------ 布局助手
 static func _rect(c: Control, ax0: float, ay0: float, ax1: float, ay1: float,
 		l: float, t: float, r: float, b: float) -> void:
 	c.anchor_left = ax0
@@ -58,33 +74,22 @@ static func _rect(c: Control, ax0: float, ay0: float, ax1: float, ay1: float,
 	c.offset_right = r
 	c.offset_bottom = b
 
-## 左上
 static func _tl(c: Control, x: float, y: float, w: float, h: float) -> void:
 	_rect(c, 0.0, 0.0, 0.0, 0.0, x, y, x + w, y + h)
 
-## 右上（mx/my 为距右边/顶边的边距）
 static func _tr(c: Control, mx: float, my: float, w: float, h: float) -> void:
 	_rect(c, 1.0, 0.0, 1.0, 0.0, -mx - w, my, -mx, my + h)
 
-## 左下（mx/my 为距左边/底边的边距）
-static func _bl(c: Control, mx: float, my: float, w: float, h: float) -> void:
-	_rect(c, 0.0, 1.0, 0.0, 1.0, mx, -my - h, mx + w, -my)
-
-## 右下
-static func _br(c: Control, mx: float, my: float, w: float, h: float) -> void:
-	_rect(c, 1.0, 1.0, 1.0, 1.0, -mx - w, -my - h, -mx, -my)
-
-## 水平居中 + 贴底（w 为宽度，my 为距底边距离）
+## 水平居中 + 贴底
 static func _bc(c: Control, w: float, my: float, h: float) -> void:
 	_rect(c, 0.5, 1.0, 0.5, 1.0, -w * 0.5, -my - h, w * 0.5, -my)
 
-## 正中
+## 水平居中 + 贴顶
+static func _tc(c: Control, w: float, my: float, h: float) -> void:
+	_rect(c, 0.5, 0.0, 0.5, 0.0, -w * 0.5, my, w * 0.5, my + h)
+
 static func _center(c: Control, w: float, h: float) -> void:
 	_rect(c, 0.5, 0.5, 0.5, 0.5, -w * 0.5, -h * 0.5, w * 0.5, h * 0.5)
-
-func _ready() -> void:
-	layer = 10
-	_build()
 
 # ------------------------------------------------------------------ 构建
 func _build() -> void:
@@ -93,9 +98,16 @@ func _build() -> void:
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(root)
 
-	# ---- FPS（左上角）----
+	# ---- 雷达（左上角）----
+	minimap = Minimap.new()
+	minimap.setup(60.0)
+	_tl(minimap, 14, 14, 150, 150)
+	minimap.visible = false          # 默认关，由具体模式决定是否开启
+	root.add_child(minimap)
+
+	# ---- FPS / PING ----
 	fps_label = Label.new()
-	_tl(fps_label, 18, 14, 240, 36)
+	_tl(fps_label, 16, 172, 300, 34)
 	fps_label.text = "FPS 60"
 	fps_label.add_theme_font_size_override("font_size", 26)
 	fps_label.add_theme_color_override("font_color", Color(0.5, 1.0, 0.6))
@@ -105,7 +117,7 @@ func _build() -> void:
 	root.add_child(fps_label)
 
 	ping_label = Label.new()
-	_tl(ping_label, 18, 54, 240, 30)
+	_tl(ping_label, 16, 208, 300, 28)
 	ping_label.text = ""
 	ping_label.add_theme_font_size_override("font_size", 20)
 	ping_label.add_theme_color_override("font_color", Color(0.7, 0.85, 1.0))
@@ -114,50 +126,36 @@ func _build() -> void:
 	ping_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(ping_label)
 
-	# ---- 击杀信息（右上角）----
+	# ---- 顶部中间：比分 / 倒计时 ----
+	score_label = Label.new()
+	_tc(score_label, 520, 12, 44)
+	score_label.text = ""
+	score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	score_label.add_theme_font_size_override("font_size", 32)
+	score_label.add_theme_color_override("font_color", Color(1.0, 0.95, 0.9))
+	score_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.92))
+	score_label.add_theme_constant_override("outline_size", 7)
+	score_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(score_label)
+
+	# ---- 击杀播报 ----
 	kill_feed = VBoxContainer.new()
-	_tr(kill_feed, 18, 86, 330, 250)
+	_tr(kill_feed, 16, 76, 320, 240)
 	kill_feed.alignment = BoxContainer.ALIGNMENT_BEGIN
 	kill_feed.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(kill_feed)
 
-	# ---- 底部：血条 + 弹药 ----
-	var bottom := HBoxContainer.new()
-	_bc(bottom, 640, 20, 52)
-	bottom.add_theme_constant_override("separation", 12)
-	bottom.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	root.add_child(bottom)
+	# ---- 退出 ----
+	var back := _mk_button("退出", Color(0.35, 0.12, 0.14), 20)
+	_tr(back, 16, 12, 110, 56)
+	back.pressed.connect(func(): back_pressed.emit())
+	root.add_child(back)
 
-	hp_bar = ProgressBar.new()
-	hp_bar.min_value = 0
-	hp_bar.max_value = 100
-	hp_bar.value = 100
-	hp_bar.show_percentage = false
-	hp_bar.custom_minimum_size = Vector2(360, 26)
-	bottom.add_child(hp_bar)
-	_style_bar(hp_bar, Color(0.85, 0.16, 0.18), Color(0.10, 0.11, 0.13))
-
-	hp_text = Label.new()
-	hp_text.text = "100"
-	hp_text.add_theme_font_size_override("font_size", 24)
-	hp_text.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
-	hp_text.add_theme_constant_override("outline_size", 5)
-	hp_text.custom_minimum_size = Vector2(56, 0)
-	bottom.add_child(hp_text)
-
-	ammo_label = Label.new()
-	ammo_label.text = "30 / 150"
-	ammo_label.add_theme_font_size_override("font_size", 30)
-	ammo_label.add_theme_color_override("font_color", Color(1.0, 0.92, 0.55))
-	ammo_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
-	ammo_label.add_theme_constant_override("outline_size", 6)
-	ammo_label.custom_minimum_size = Vector2(180, 0)
-	ammo_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	bottom.add_child(ammo_label)
-
+	# ---- 底部：姿态 / 弹药 / 血条 ----
 	stance_label = Label.new()
-	_bc(stance_label, 640, 76, 32)
+	_bc(stance_label, 420, 116, 32)
 	stance_label.text = "站立"
+	stance_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	stance_label.add_theme_font_size_override("font_size", 22)
 	stance_label.add_theme_color_override("font_color", Color(0.75, 0.85, 1.0))
 	stance_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
@@ -165,12 +163,67 @@ func _build() -> void:
 	stance_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(stance_label)
 
-	# ---- 准星 / 命中标记 ----
+	var hp_row := HBoxContainer.new()
+	_bc(hp_row, 520, 62, 40)
+	hp_row.add_theme_constant_override("separation", 10)
+	hp_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(hp_row)
+
+	hp_bar = ProgressBar.new()
+	hp_bar.min_value = 0
+	hp_bar.max_value = 100
+	hp_bar.value = 100
+	hp_bar.show_percentage = false
+	hp_bar.custom_minimum_size = Vector2(420, 30)
+	hp_row.add_child(hp_bar)
+	_style_bar(hp_bar, Color(0.2, 0.75, 0.35), Color(0.10, 0.11, 0.13))
+
+	hp_text = Label.new()
+	hp_text.text = "100"
+	hp_text.add_theme_font_size_override("font_size", 26)
+	hp_text.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	hp_text.add_theme_constant_override("outline_size", 5)
+	hp_text.custom_minimum_size = Vector2(60, 0)
+	hp_row.add_child(hp_text)
+
+	# 弹药量：屏幕底部正中
+	ammo_label = Label.new()
+	_bc(ammo_label, 460, 16, 44)
+	ammo_label.text = "30 / 150"
+	ammo_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	ammo_label.add_theme_font_size_override("font_size", 36)
+	ammo_label.add_theme_color_override("font_color", Color(1.0, 0.92, 0.55))
+	ammo_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.92))
+	ammo_label.add_theme_constant_override("outline_size", 7)
+	ammo_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(ammo_label)
+
+	# 换弹提示
+	reload_tip = Label.new()
+	_bc(reload_tip, 460, 168, 32)
+	reload_tip.text = ""
+	reload_tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	reload_tip.add_theme_font_size_override("font_size", 24)
+	reload_tip.add_theme_color_override("font_color", Color(1.0, 0.55, 0.35))
+	reload_tip.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.92))
+	reload_tip.add_theme_constant_override("outline_size", 6)
+	reload_tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(reload_tip)
+
+	# ---- 准星 / 命中标记 / 倍镜 / 受伤闪烁 ----
 	crosshair = Control.new()
 	crosshair.set_anchors_preset(Control.PRESET_FULL_RECT)
 	crosshair.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	crosshair.draw.connect(_draw_crosshair)
 	root.add_child(crosshair)
+
+	_scope = Control.new()
+	_scope.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_scope.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_scope.visible = false
+	_scope.draw.connect(_draw_scope)
+	root.add_child(_scope)
+	_make_scope_tex()
 
 	hitmark = Control.new()
 	hitmark.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -178,9 +231,17 @@ func _build() -> void:
 	hitmark.draw.connect(_draw_hitmark)
 	root.add_child(hitmark)
 
+	# 受伤时屏幕四边红闪
+	var dmg := Control.new()
+	dmg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dmg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	dmg.draw.connect(_draw_damage)
+	root.add_child(dmg)
+	_damage_layer = dmg
+
 	# ---- 中央提示 ----
 	notice = Label.new()
-	_center(notice, 760, 130)
+	_center(notice, 820, 150)
 	notice.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	notice.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -191,19 +252,301 @@ func _build() -> void:
 	notice.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(notice)
 
-	# ---- 退出按钮 ----
-	var back := _mk_button("退出", Color(0.35, 0.12, 0.14), 20)
-	_tr(back, 18, 14, 110, 58)
-	back.pressed.connect(func(): back_pressed.emit())
-	root.add_child(back)
+	# ---- 使用治疗物：倒计时 + 取消 ----
+	_use_lbl = Label.new()
+	_tc(_use_lbl, 520, 210, 40)
+	_use_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_use_lbl.add_theme_font_size_override("font_size", 34)
+	_use_lbl.add_theme_color_override("font_color", Color(0.6, 1.0, 0.7))
+	_use_lbl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.95))
+	_use_lbl.add_theme_constant_override("outline_size", 7)
+	root.add_child(_use_lbl)
 
-	# ---- 虚拟摇杆 ----
+	_use_bar = ProgressBar.new()
+	_tc(_use_bar, 420, 258, 18)
+	_use_bar.max_value = 100
+	_use_bar.show_percentage = false
+	var fs := StyleBoxFlat.new()
+	fs.bg_color = Color(0.35, 0.9, 0.45)
+	_use_bar.add_theme_stylebox_override("fill", fs)
+	var gs := StyleBoxFlat.new()
+	gs.bg_color = Color(0, 0, 0, 0.45)
+	gs.set_corner_radius_all(4)
+	_use_bar.add_theme_stylebox_override("background", gs)
+	_use_bar.visible = false
+	root.add_child(_use_bar)
+
+	_cancel_btn = _mk_button("取消", Color(0.45, 0.18, 0.16), 24)
+	_tc(_cancel_btn, 200, 288, 66)
+	_cancel_btn.visible = false
+	_cancel_btn.pressed.connect(func():
+		Sfx.play("click")
+		if player != null:
+			player.cancel_item())
+	root.add_child(_cancel_btn)
+
+	# ---- 触摸控件 ----
 	_build_stick(root)
-	# ---- 动作按钮 ----
-	_build_action_buttons(root)
-	# ---- 视角拖拽区（放在按钮之下，按钮会优先吃掉事件）----
-	_build_look_area(root)
+	_build_buttons(root)
+	_build_heal(root)
+	_touch = Control.new()
+	_touch.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_touch.mouse_filter = Control.MOUSE_FILTER_STOP
+	_touch.gui_input.connect(_on_touch)
+	root.add_child(_touch)
+	root.move_child(_touch, 0)
+	relayout()
 
+# ------------------------------------------------------------------ 控件构建
+func _build_stick(root: Control) -> void:
+	_stick_area = Control.new()
+	_stick_area.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(_stick_area)
+	var base := Control.new()
+	base.set_anchors_preset(Control.PRESET_FULL_RECT)
+	base.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	base.draw.connect(_draw_stick)
+	_stick_area.add_child(base)
+	_stick_knob = base
+	_btns["stick"] = _stick_area
+
+func _build_buttons(root: Control) -> void:
+	var defs := [
+		["fire", "开火", Color(0.68, 0.14, 0.16), 26],
+		["ads", "开镜", Color(0.16, 0.34, 0.55), 22],
+		["jump", "跳", Color(0.20, 0.42, 0.30), 24],
+		["crouch", "蹲", Color(0.28, 0.34, 0.42), 22],
+		["prone", "趴", Color(0.28, 0.34, 0.42), 22],
+		["reload", "换弹", Color(0.30, 0.30, 0.34), 22],
+		["melee", "刀", Color(0.52, 0.42, 0.16), 22],
+	]
+	for d in defs:
+		var b := _mk_button(str(d[1]), d[2] as Color, int(d[3]))
+		b.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		root.add_child(b)
+		_btns[str(d[0])] = b
+
+func _build_heal(root: Control) -> void:
+	_heal_root = Control.new()
+	_heal_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(_heal_root)
+	_btns["heal"] = _heal_root
+
+	_heal_arrow = Button.new()
+	_heal_arrow.text = "▲"
+	_heal_arrow.add_theme_font_size_override("font_size", 20)
+	_heal_arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var asb := StyleBoxFlat.new()
+	asb.bg_color = Color(0.16, 0.18, 0.24, 0.92)
+	asb.set_corner_radius_all(8)
+	asb.border_width_left = 2
+	asb.border_width_right = 2
+	asb.border_width_top = 2
+	asb.border_width_bottom = 2
+	asb.border_color = Color(1, 1, 1, 0.35)
+	_heal_arrow.add_theme_stylebox_override("normal", asb)
+	_heal_root.add_child(_heal_arrow)
+
+	_heal_circle = Button.new()
+	_heal_circle.text = "绷带\n3"
+	_heal_circle.add_theme_font_size_override("font_size", 22)
+	_heal_circle.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.18, 0.46, 0.30, 0.94)
+	sb.set_corner_radius_all(999)
+	sb.border_width_left = 3
+	sb.border_width_right = 3
+	sb.border_width_top = 3
+	sb.border_width_bottom = 3
+	sb.border_color = Color(1, 1, 1, 0.45)
+	_heal_circle.add_theme_stylebox_override("normal", sb)
+	_heal_root.add_child(_heal_circle)
+
+	_heal_list = PanelContainer.new()
+	_heal_list.visible = false
+	var lsb := StyleBoxFlat.new()
+	lsb.bg_color = Color(0.08, 0.10, 0.14, 0.96)
+	lsb.set_corner_radius_all(12)
+	lsb.border_width_left = 2
+	lsb.border_width_right = 2
+	lsb.border_width_top = 2
+	lsb.border_width_bottom = 2
+	lsb.border_color = Color(1, 1, 1, 0.28)
+	_heal_list.add_theme_stylebox_override("panel", lsb)
+	root.add_child(_heal_list)
+	_rebuild_heal_list()
+
+## 把存档里的位置 / 大小 / 透明度应用到所有触摸控件
+func relayout() -> void:
+	var vp := get_viewport().get_visible_rect().size
+	for k in _btns:
+		var c := _btns[k] as Control
+		TouchLayout.apply(c, k, vp)
+	_stick_base = _stick_area.size / 2.0
+	# 治疗物：圆形在下、三角箭头在上
+	var hr := TouchLayout.size_of("heal", vp)
+	_heal_circle.size = Vector2(hr.x, hr.x)
+	_heal_circle.position = Vector2(0, hr.y - hr.x)
+	_heal_arrow.size = Vector2(hr.x * 0.52, hr.y - hr.x - 4)
+	_heal_arrow.position = Vector2(hr.x * 0.24, 0)
+	_heal_root.modulate.a = TouchLayout.alpha_of("heal")
+	var lp := _heal_root.position + Vector2(hr.x * 0.5 - 150, -6)
+	_heal_list.position = Vector2(lp.x, maxf(lp.y - _heal_list.size.y, 8))
+	if _stick_knob != null:
+		_stick_knob.queue_redraw()
+
+# ------------------------------------------------------------------ 输入
+func _vp() -> Vector2:
+	return get_viewport().get_visible_rect().size
+
+func _on_touch(e: InputEvent) -> void:
+	if _edit_preview:
+		return
+	if e is InputEventScreenTouch:
+		if e.pressed:
+			var k := TouchLayout.hit(_vp(), e.position)
+			_route_down(k, e)
+		else:
+			_route_up(e.index)
+	elif e is InputEventScreenDrag:
+		if e.index == _stick_idx:
+			_update_stick(e.position)
+		elif e.index == _fire_idx:
+			pass    # 长按后滑动仍然持续开火，不中断
+		elif e.index == _look_idx:
+			if player != null:
+				player.add_look(e.relative * 0.0055 * GameSettings.sensitivity)
+	elif e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
+		if e.pressed:
+			_route_down(TouchLayout.hit(_vp(), e.position), e)
+		else:
+			_route_up(0)
+	elif e is InputEventMouseMotion:
+		if _stick_idx == 0:
+			_update_stick(e.position)
+		elif _look_idx == 0:
+			if player != null:
+				player.add_look(e.relative * 0.0055 * GameSettings.sensitivity)
+
+func _route_down(k: String, e: InputEvent) -> void:
+	var idx := e.get("index") if e is InputEventScreenTouch else 0
+	if player == null:
+		return
+	match k:
+		"stick":
+			_stick_idx = idx
+			_update_stick(e.position)
+		"fire":
+			_fire_idx = idx
+			player.want_fire = true
+		"ads":
+			_toggle_ads()
+		"jump":
+			player.request_jump()
+		"crouch":
+			player.set_stance(Player.Stance.CROUCH if player.stance != Player.Stance.CROUCH \
+					else Player.Stance.STAND)
+		"prone":
+			player.set_stance(Player.Stance.PRONE if player.stance != Player.Stance.PRONE \
+					else Player.Stance.STAND)
+		"reload":
+			player.start_reload()
+		"melee":
+			player.toggle_weapon()
+		"heal":
+			var local := e.position - _heal_root.position
+			if local.y < _heal_circle.position.y:
+				_toggle_heal_list()
+			else:
+				player.use_selected_item()
+		_:
+			_look_idx = idx
+
+func _route_up(idx: int) -> void:
+	if idx == _stick_idx:
+		_stick_idx = -1
+		_stick_vec = Vector2.ZERO
+		if _stick_knob != null:
+			_stick_knob.queue_redraw()
+		if player != null:
+			player.move_axis = Vector2.ZERO
+	if idx == _fire_idx:
+		_fire_idx = -1
+		if player != null:
+			player.want_fire = false
+	if idx == _look_idx:
+		_look_idx = -1
+
+func _update_stick(p: Vector2) -> void:
+	var r := _stick_area.size.x * 0.30
+	var d := p - (_stick_area.position + _stick_base)
+	if d.length() > r:
+		d = d.normalized() * r
+	_stick_vec = d / r
+	if _stick_knob != null:
+		_stick_knob.queue_redraw()
+	if player != null:
+		player.move_axis = Vector2(_stick_vec.x, _stick_vec.y)
+
+func _toggle_ads() -> void:
+	_ads_on = not _ads_on
+	Sfx.play("click")
+	if player != null:
+		player.touch_ads = _ads_on
+
+# ------------------------------------------------------------------ 治疗物 UI
+func _toggle_heal_list() -> void:
+	_heal_open = not _heal_open
+	Sfx.play("click")
+	_heal_list.visible = _heal_open
+	if _heal_open:
+		_rebuild_heal_list()
+		var vp := _vp()
+		_heal_list.size = _heal_list.get_combined_minimum_size()
+		_heal_list.position = Vector2(
+				clampf(_heal_root.position.x + _heal_root.size.x * 0.5 - 150, 8, vp.x - 308),
+				maxf(_heal_root.position.y - _heal_list.size.y - 6, 8))
+
+func _rebuild_heal_list() -> void:
+	for c in _heal_list.get_children():
+		c.queue_free()
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 6)
+	_heal_list.add_child(v)
+	if player == null:
+		return
+	for i in Player.Item.values():
+		var b := Button.new()
+		b.text = "%s  x%d" % [player.item_name(i), player.item_count(i)]
+		b.custom_minimum_size = Vector2(300, 62)
+		b.add_theme_font_size_override("font_size", 22)
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(0.20, 0.22, 0.28) if player.selected_item != i \
+				else Color(0.18, 0.46, 0.30)
+		sb.set_corner_radius_all(10)
+		sb.border_width_left = 2
+		sb.border_width_right = 2
+		sb.border_width_top = 2
+		sb.border_width_bottom = 2
+		sb.border_color = Color(1, 1, 1, 0.35)
+		b.add_theme_stylebox_override("normal", sb)
+		b.pressed.connect(func():
+			Sfx.play("click")
+			player.select_item(i)
+			_heal_open = false
+			_heal_list.visible = false
+		)
+		v.add_child(b)
+
+func _refresh_heal_btn() -> void:
+	if player == null:
+		return
+	var n := player.item_name(player.selected_item)
+	_heal_circle.text = "%s\n%d" % [n.substr(0, mini(4, n.length())),
+			player.item_count(player.selected_item)]
+	_heal_circle.disabled = player.item_count(player.selected_item) <= 0
+
+# ------------------------------------------------------------------ 样式
 func _style_bar(b: ProgressBar, fg: Color, bg: Color) -> void:
 	var s := StyleBoxFlat.new()
 	s.bg_color = fg
@@ -224,168 +567,18 @@ func _mk_button(text: String, col: Color, fs: int = 24) -> Button:
 	n.border_width_right = 2
 	n.border_width_top = 2
 	n.border_width_bottom = 2
-	n.border_color = Color(1, 1, 1, 0.28)
+	n.border_color = Color(1, 1, 1, 0.42)
 	b.add_theme_stylebox_override("normal", n)
 	var p := StyleBoxFlat.new()
 	p.bg_color = col.lightened(0.25)
 	p.set_corner_radius_all(999)
+	p.border_width_left = 2
+	p.border_width_right = 2
+	p.border_width_top = 2
+	p.border_width_bottom = 2
+	p.border_color = Color(1, 1, 1, 0.7)
 	b.add_theme_stylebox_override("pressed", p)
 	return b
-
-func _circle_button(text: String, col: Color, fs: int = 24) -> Button:
-	var b := _mk_button(text, col, fs)
-	b.size = Vector2(BTN, BTN)
-	return b
-
-func _build_stick(root: Control) -> void:
-	_stick_area = Control.new()
-	_bl(_stick_area, 28, 46, 272, 260)
-	_stick_area.mouse_filter = Control.MOUSE_FILTER_STOP
-	_stick_area.gui_input.connect(_on_stick_input)
-	root.add_child(_stick_area)
-
-	_stick_base = Vector2(136, 130)
-	var base := Control.new()
-	base.set_anchors_preset(Control.PRESET_FULL_RECT)
-	base.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	base.draw.connect(func():
-		base.draw_circle(_stick_base, STICK_R, Color(1, 1, 1, 0.07))
-		base.draw_arc(_stick_base, STICK_R, 0, TAU, 48, Color(1, 1, 1, 0.18), 3.0)
-		base.draw_circle(_stick_base + _stick_vec * STICK_R, 38.0, Color(1, 1, 1, 0.22))
-	)
-	_stick_area.add_child(base)
-	_stick_knob = base
-
-func _build_look_area(root: Control) -> void:
-	var a := Control.new()
-	a.set_anchors_preset(Control.PRESET_FULL_RECT)
-	a.mouse_filter = Control.MOUSE_FILTER_STOP
-	a.gui_input.connect(_on_look_input)
-	root.add_child(a)
-	root.move_child(a, 0)   # 置于最底，保证按钮优先响应
-
-func _build_action_buttons(root: Control) -> void:
-	_btn_fire = _circle_button("开火", Color(0.68, 0.14, 0.16), 26)
-	_br(_btn_fire, 28, 28, BTN, BTN)
-	_btn_fire.gui_input.connect(func(e):
-		if player == null:
-			return
-		if e is InputEventScreenTouch:
-			player.want_fire = e.pressed
-		elif e is InputEventMouseButton:
-			player.want_fire = e.pressed
-	)
-	root.add_child(_btn_fire)
-
-	_btn_ads = _circle_button("开镜", Color(0.16, 0.34, 0.55), 22)
-	_br(_btn_ads, 28, 140, BTN, BTN)
-	_btn_ads.gui_input.connect(func(e):
-		if e is InputEventScreenTouch or e is InputEventMouseButton:
-			_ads_held = e.pressed
-	)
-	root.add_child(_btn_ads)
-
-	_btn_reload = _circle_button("换弹", Color(0.30, 0.30, 0.34), 22)
-	_br(_btn_reload, 28, 252, BTN, BTN)
-	_btn_reload.pressed.connect(func():
-		if player != null:
-			player.start_reload())
-	root.add_child(_btn_reload)
-
-	# 跳跃：在“按下”瞬间就触发，等松手再跳会明显迟滞，
-	# 也做不到边跑边跳（按住摇杆的同时必须能立刻起跳）
-	_btn_jump = _circle_button("跳", Color(0.20, 0.42, 0.30), 24)
-	_br(_btn_jump, 140, 28, BTN, BTN)
-	_btn_jump.gui_input.connect(func(e):
-		if player == null:
-			return
-		if e is InputEventScreenTouch:
-			if e.pressed:
-				player.request_jump()
-		elif e is InputEventMouseButton and e.pressed \
-				and e.button_index == MOUSE_BUTTON_LEFT:
-			player.request_jump()
-	)
-	root.add_child(_btn_jump)
-
-	_btn_crouch = _circle_button("蹲", Color(0.28, 0.34, 0.42), 22)
-	_br(_btn_crouch, 140, 140, BTN, BTN)
-	_btn_crouch.pressed.connect(func():
-		if player == null:
-			return
-		player.set_stance(Player.Stance.CROUCH if player.stance != Player.Stance.CROUCH \
-				else Player.Stance.STAND))
-	root.add_child(_btn_crouch)
-
-	_btn_prone = _circle_button("趴", Color(0.28, 0.34, 0.42), 22)
-	_br(_btn_prone, 140, 252, BTN, BTN)
-	_btn_prone.pressed.connect(func():
-		if player == null:
-			return
-		player.set_stance(Player.Stance.PRONE if player.stance != Player.Stance.PRONE \
-				else Player.Stance.STAND))
-	root.add_child(_btn_prone)
-
-	# 疾跑改成点一下切换：左手拇指要同时按住摇杆和疾跑键根本按不过来
-	_btn_sprint = _circle_button("疾跑", Color(0.45, 0.36, 0.14), 22)
-	_bl(_btn_sprint, 324, 100, 104, 104)
-	_btn_sprint.toggle_mode = true
-	_btn_sprint.toggled.connect(func(on: bool):
-		_sprint_on = on
-		Sfx.play("click")
-	)
-	root.add_child(_btn_sprint)
-
-# ------------------------------------------------------------------ 输入
-func _on_stick_input(e: InputEvent) -> void:
-	if e is InputEventScreenTouch:
-		if e.pressed and _stick_idx == -1:
-			_stick_idx = e.index
-			_update_stick(e.position)
-		elif not e.pressed and e.index == _stick_idx:
-			_stick_idx = -1
-			_stick_vec = Vector2.ZERO
-			_stick_knob.queue_redraw()
-			if player:
-				player.move_axis = Vector2.ZERO
-	elif e is InputEventScreenDrag and e.index == _stick_idx:
-		_update_stick(e.position)
-	elif e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
-		if e.pressed:
-			_stick_idx = 0
-			_update_stick(e.position)
-		else:
-			_stick_idx = -1
-			_stick_vec = Vector2.ZERO
-			_stick_knob.queue_redraw()
-			if player:
-				player.move_axis = Vector2.ZERO
-	elif e is InputEventMouseMotion and _stick_idx == 0:
-		_update_stick(e.position)
-
-func _update_stick(p: Vector2) -> void:
-	var d := p - _stick_base
-	var r := d.length()
-	if r > STICK_R:
-		d = d.normalized() * STICK_R
-	_stick_vec = d / STICK_R
-	_stick_knob.queue_redraw()
-	if player:
-		# 摇杆上推 -> move_axis.y = -1，与键盘 W 一致（前进方向为 -Z）
-		player.move_axis = Vector2(_stick_vec.x, _stick_vec.y)
-
-func _on_look_input(e: InputEvent) -> void:
-	if player == null:
-		return
-	if e is InputEventScreenTouch:
-		if e.pressed and _look_idx == -1:
-			_look_idx = e.index
-		elif not e.pressed and e.index == _look_idx:
-			_look_idx = -1
-	elif e is InputEventScreenDrag and e.index == _look_idx:
-		player.add_look(e.relative * 0.0055 * GameSettings.sensitivity)
-	elif e is InputEventMouseMotion and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
-		player.add_look(e.relative * 0.0055 * GameSettings.sensitivity)
 
 # ------------------------------------------------------------------ 绑定
 func bind_player(p: Player) -> void:
@@ -395,10 +588,19 @@ func bind_player(p: Player) -> void:
 	p.stance_changed.connect(_on_stance)
 	p.hit_confirmed.connect(_on_hit)
 	p.died.connect(_on_died)
-	p.respawned.connect(func(): notice.text = "")
+	p.damaged.connect(_on_damaged)
+	p.weapon_changed.connect(_on_weapon)
+	p.items_changed.connect(_on_items)
+	p.item_state_changed.connect(_on_item_state)
+	p.respawn_tick.connect(_on_respawn_tick)
+	p.respawned.connect(func():
+		notice.text = ""
+		_use_lbl.text = "")
 	_on_hp(p.hp, 100.0)
 	_on_ammo(p.mag, p.reserve)
 	_on_stance(p.stance)
+	_on_weapon(p.weapon)
+	_on_items()
 
 func _on_hp(h: float, _m: float) -> void:
 	hp_bar.value = h
@@ -409,8 +611,13 @@ func _on_hp(h: float, _m: float) -> void:
 	elif h > 30:
 		col = Color(0.95, 0.7, 0.15)
 	_style_bar(hp_bar, col, Color(0.10, 0.11, 0.13))
+	_hp_flash_t = 0.25
 
 func _on_ammo(mag: int, reserve: int) -> void:
+	if player != null and player.weapon == Player.Weapon.MELEE:
+		ammo_label.text = "近战 · 刀"
+		ammo_label.add_theme_color_override("font_color", Color(0.85, 0.9, 1.0))
+		return
 	ammo_label.text = "%d / %d" % [mag, reserve]
 	if mag == 0:
 		ammo_label.add_theme_color_override("font_color", Color(1.0, 0.35, 0.3))
@@ -420,14 +627,52 @@ func _on_ammo(mag: int, reserve: int) -> void:
 func _on_stance(s: int) -> void:
 	stance_label.text = ["站立", "蹲下", "趴下"][s] if s < 3 else "站立"
 
+func _on_weapon(w: int) -> void:
+	if w == Player.Weapon.MELEE:
+		stance_label.text = "近战"
+		_on_ammo(player.mag, player.reserve)
+	else:
+		_on_stance(player.stance)
+
+func _on_items() -> void:
+	_refresh_heal_btn()
+	if _heal_open:
+		_rebuild_heal_list()
+
+func _on_item_state(using: int, left: float, total: float) -> void:
+	if using < 0:
+		_use_lbl.text = ""
+		_use_bar.visible = false
+		_cancel_btn.visible = false
+		return
+	_use_bar.visible = true
+	_cancel_btn.visible = true
+	_use_bar.value = (1.0 - left / maxf(total, 0.001)) * 100.0
+	_use_lbl.text = "使用 %s  %.1fs" % [player.item_name(using), left]
+
 func _on_hit(lethal: bool) -> void:
 	_hit_t = 0.22
 	_hit_lethal = lethal
 	hitmark.queue_redraw()
 	Sfx.play("hitmark", -8.0)
 
-func _on_died(killer: String) -> void:
-	notice.text = "你被 %s 击杀\n3 秒后重新部署" % killer
+func _on_damaged(_amount: float, _from: String) -> void:
+	_flash_t = 0.45          # 屏幕边框红一下
+	_hp_flash_t = 0.30       # 血条红闪一下
+
+func _on_died(_killer: String) -> void:
+	notice.text = "已被击杀"
+
+func _on_respawn_tick(sec: int) -> void:
+	notice.text = "%d 秒后复活" % sec
+
+## 小地图只在联机模式开启，且受设置里的开关控制
+func set_minimap_enabled(on: bool) -> void:
+	if minimap != null:
+		minimap.visible = on and GameSettings.show_minimap
+
+func set_score(text: String) -> void:
+	score_label.text = text
 
 func push_kill(text: String) -> void:
 	var l := Label.new()
@@ -443,61 +688,145 @@ func push_kill(text: String) -> void:
 		l.queue_free()
 
 func set_ping(ms: float, online: bool) -> void:
-	if online:
-		ping_label.text = "PING %dms" % int(ms)
-	else:
-		ping_label.text = ""
+	ping_label.text = "PING %dms" % int(ms) if online else ""
 
 # ------------------------------------------------------------------ 绘制
 func _process(delta: float) -> void:
-	# FPS：0.35s 刷新一次，避免数字乱跳
 	_fps_acc += delta
 	if _fps_acc >= 0.35:
 		_fps_acc = 0.0
-		_fps_val = Engine.get_frames_per_second()
-		var ms := 1000.0 / maxf(_fps_val, 1.0)
-		fps_label.text = "FPS %d  (%.1fms)" % [int(_fps_val), ms]
+		var v := Engine.get_frames_per_second()
+		var ms := 1000.0 / maxf(v, 1.0)
+		fps_label.text = "FPS %d  (%.1fms)" % [int(v), ms]
 		fps_label.add_theme_color_override("font_color",
-				Color(0.45, 1.0, 0.55) if _fps_val >= 55 else
-				Color(1.0, 0.85, 0.35) if _fps_val >= 30 else Color(1.0, 0.4, 0.35))
+				Color(0.45, 1.0, 0.55) if v >= 55 else
+				Color(1.0, 0.85, 0.35) if v >= 30 else Color(1.0, 0.4, 0.35))
 
 	if player != null:
-		var s := player._spread
-		_spread_px = clampf(s * 900.0, 4.0, 90.0)
-		crosshair.queue_redraw()
-		player.touch_ads = _ads_held
-		player.touch_sprint = _sprint_on
+		_spread_px = clampf(player._spread * 900.0, 4.0, 90.0)
+		_scope.visible = player.ads and player.weapon == Player.Weapon.RANGED
+		# 换弹提示
+		if player.is_reloading():
+			reload_tip.text = "换弹中… %.1fs" % player.reload_left()
+		elif player.weapon == Player.Weapon.RANGED and player.mag == 0:
+			reload_tip.text = "弹匣已空 · 点击「换弹」"
+		elif player.weapon == Player.Weapon.RANGED and player.mag <= 5:
+			reload_tip.text = "弹药不足 %d" % player.mag
+		else:
+			reload_tip.text = ""
+		if player.touch_ads != _ads_on:
+			_ads_on = player.touch_ads
+	crosshair.queue_redraw()
 
 	if _hit_t > 0.0:
 		_hit_t -= delta
 		hitmark.queue_redraw()
+	if _flash_t > 0.0:
+		_flash_t -= delta
+		if _damage_layer != null:
+			_damage_layer.queue_redraw()
+	if _hp_flash_t > 0.0:
+		_hp_flash_t -= delta
+		if _hp_flash_t <= 0.0 and player != null:
+			_on_hp(player.hp, 100.0)
+
+func _draw_stick() -> void:
+	var r := _stick_area.size.x * 0.30
+	var c := _stick_base
+	_stick_knob.draw_circle(c, r, Color(1, 1, 1, 0.07))
+	_stick_knob.draw_arc(c, r, 0, TAU, 48, Color(1, 1, 1, 0.18), 3.0)
+	_stick_knob.draw_circle(c + _stick_vec * r, r * 0.45, Color(1, 1, 1, 0.22))
 
 func _draw_crosshair() -> void:
-	var c := Vector2(360, 640)
-	var cw := get_viewport().get_visible_rect()
-	c = cw.size / 2.0
-	var gap := _spread_px
-	var len := 9.0
-	var col := Color(0.25, 1.0, 0.45, 0.95) if (player != null and player.ads) \
-			else Color(1, 1, 1, 0.95)
-	if player != null and player.ads:
-		crosshair.draw_circle(c, 2.0, col)
-		crosshair.draw_arc(c, 7.0, 0, TAU, 32, Color(0.2, 0.9, 0.4, 0.7), 2.0)
-		return
-	var dirs: Array[Vector2] = [Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1)]
-	for d: Vector2 in dirs:
-		var a: Vector2 = c + d * gap
-		var b: Vector2 = c + d * (gap + len)
-		crosshair.draw_line(a, b, col, 2.5)
-	crosshair.draw_circle(c, 1.6, col)
+	if player != null and player.ads and player.weapon == Player.Weapon.RANGED:
+		return  # 开镜时由倍镜自己画准星
+	var c := _vp() / 2.0
+	var s := GameSettings.cross_size
+	var gap := GameSettings.cross_gap * s + _spread_px
+	var ln := GameSettings.cross_length * s
+	var th := GameSettings.cross_thick * s
+	var col := GameSettings.cross_color
+	match GameSettings.cross_style:
+		GameSettings.CrossStyle.DOT:
+			crosshair.draw_circle(c, maxf(1.5, th), col)
+		GameSettings.CrossStyle.CIRCLE:
+			crosshair.draw_arc(c, maxf(4.0, ln), 0, TAU, 40, col, th)
+			if GameSettings.cross_dot:
+				crosshair.draw_circle(c, maxf(1.2, th * 0.6), col)
+		GameSettings.CrossStyle.CROSS:
+			crosshair.draw_line(c + Vector2(-gap - ln, 0), c + Vector2(gap + ln, 0), col, th)
+			crosshair.draw_line(c + Vector2(0, -gap - ln), c + Vector2(0, gap + ln), col, th)
+			if GameSettings.cross_dot:
+				crosshair.draw_circle(c, maxf(1.2, th * 0.6), col)
+		_:  # STANDARD：四段臂 + 中心点
+			var dirs: Array[Vector2] = [Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1)]
+			for d: Vector2 in dirs:
+				crosshair.draw_line(c + d * gap, c + d * (gap + ln), col, th)
+			if GameSettings.cross_dot:
+				crosshair.draw_circle(c, maxf(1.2, th * 0.6), col)
+
+func _make_scope_tex() -> void:
+	var n := 256
+	var img := Image.create(n, n, false, Image.FORMAT_RGBA8)
+	var half := float(n) / 2.0
+	for y in n:
+		for x in n:
+			var dx := float(x) - half
+			var dy := float(y) - half
+			var d := sqrt(dx * dx + dy * dy) / half
+			# 圆内透明，圆外纯黑（形成圆形窥孔）
+			var a := 0.0 if d <= 0.985 else 1.0
+			img.set_pixel(x, y, Color(0, 0, 0, a))
+	_scope_tex = ImageTexture.create_from_image(img)
+
+func _draw_scope() -> void:
+	var vp := _vp()
+	var c := vp / 2.0
+	var r := minf(vp.x, vp.y) * 0.38
+	# 圆形窥孔外的黑幕
+	if _scope_tex != null:
+		_scope.draw_texture_rect(_scope_tex, Rect2(c - Vector2(r, r), Vector2(r * 2, r * 2)), false)
+	_scope.draw_rect(Rect2(0, 0, vp.x, c.y - r), Color(0, 0, 0, 1))
+	_scope.draw_rect(Rect2(0, c.y + r, vp.x, vp.y - c.y - r), Color(0, 0, 0, 1))
+	_scope.draw_rect(Rect2(0, c.y - r, c.x - r, r * 2), Color(0, 0, 0, 1))
+	_scope.draw_rect(Rect2(c.x + r, c.y - r, vp.x - c.x - r, r * 2), Color(0, 0, 0, 1))
+	# 镜圈
+	_scope.draw_arc(c, r, 0, TAU, 64, Color(0.06, 0.07, 0.09), 10.0)
+	_scope.draw_arc(c, r - 5, 0, TAU, 64, Color(0.55, 0.62, 0.72, 0.75), 2.0)
+	# 镜内准星（细十字 + 中心点）
+	var col := GameSettings.cross_color
+	var ln := clampf(GameSettings.cross_length * GameSettings.cross_size, 6.0, r * 0.7)
+	var th := maxf(1.2, GameSettings.cross_thick * GameSettings.cross_size * 0.7)
+	_scope.draw_line(c + Vector2(-ln, 0), c + Vector2(ln, 0), col, th)
+	_scope.draw_line(c + Vector2(0, -ln), c + Vector2(0, ln), col, th)
+	_scope.draw_circle(c, 1.6, col)
+	# 密位刻度
+	for i in 3:
+		var y := c.y + float(i + 1) * r * 0.22
+		_scope.draw_line(c + Vector2(-6, y - c.y), c + Vector2(6, y - c.y), col, 1.5)
 
 func _draw_hitmark() -> void:
 	if _hit_t <= 0.0:
 		return
-	var c := get_viewport().get_visible_rect().size / 2.0
+	var c := _vp() / 2.0
 	var a := lerpf(0.0, 1.0, _hit_t / 0.22) * 0.6 + 0.4
 	var col := Color(1.0, 0.25, 0.2, a) if _hit_lethal else Color(1, 1, 1, a)
 	var r := 12.0
 	var dirs: Array[Vector2] = [Vector2(1, 1), Vector2(1, -1), Vector2(-1, 1), Vector2(-1, -1)]
 	for d: Vector2 in dirs:
 		hitmark.draw_line(c + d * r * 0.5, c + d * (r + 10), col, 3.0)
+
+func _draw_damage() -> void:
+	if _flash_t <= 0.0:
+		return
+	var vp := _vp()
+	var a := clampf(_flash_t / 0.45, 0.0, 1.0) * 0.55
+	var layers := 5
+	for i in layers:
+		var t := float(i) / float(layers)
+		var w := lerpf(26.0, 4.0, t)
+		var c := Color(1.0, 0.10, 0.12, a * (1.0 - t) * 0.55)
+		_damage_layer.draw_rect(Rect2(0, 0, vp.x, w), c)
+		_damage_layer.draw_rect(Rect2(0, vp.y - w, vp.x, w), c)
+		_damage_layer.draw_rect(Rect2(0, 0, w, vp.y), c)
+		_damage_layer.draw_rect(Rect2(vp.x - w, 0, w, vp.y), c)

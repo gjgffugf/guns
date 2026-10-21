@@ -156,6 +156,10 @@ for dp, dn, fn in os.walk(ROOT):
                 in_static = bool(m.group(2))
                 indent_static = len(m.group(1))
                 continue
+            # 顶层成员声明（var/const/signal/enum/class）出现 => 已离开函数体
+            if re.match(r'^(var|const|signal|enum|class|@\w+)\s', ln):
+                in_static = False
+                continue
             if in_static and re.match(r'^\t*static\s+func\s', ln):
                 in_static = True
             if in_static:
@@ -213,6 +217,9 @@ VALID_ANDROID_KEYS = {
     "architectures/x86", "architectures/x86_64",
     "apk_expansion/enable", "apk_expansion/SALT", "apk_expansion/public_key",
     "command_line/extra_args",
+    "permissions/request_install_packages",
+    "permissions/read_external_storage",
+    "permissions/write_external_storage",
     "xr_features/xr_mode", "xr_features/hand_tracking",
     "xr_features/hand_tracking_frequency", "xr_features/passthrough",
     "xr_features/button_quantization",

@@ -2,17 +2,27 @@ extends Node3D
 ## 单人模式：代码生成的测试地图 + 本地玩家 + 1 名战术人机。
 
 const BOT_COUNT := 1
+## 比分机制：人机阵营 / 玩家谁先到 WIN_SCORE 即获胜；
+## 倒计时 MATCH_TIME 秒结束则比分高的一方获胜，相同为平局。
+const WIN_SCORE := 10
+const MATCH_TIME := 600.0        # 10 分钟
 
 var player: Player
 var hud: Hud
 var _bots: Array[Bot] = []
 var _spawn_points: Array[Vector3] = []
 
+var _score_self: int = 0
+var _score_enemy: int = 0
+var _time_left: float = MATCH_TIME
+var _over: bool = false
+
 func _ready() -> void:
 	_build_world()
 	_build_player()
 	_build_bots()
 	_build_hud()
+	_refresh_score()
 	if OS.has_feature("pc"):
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
@@ -67,7 +77,11 @@ func _build_player() -> void:
 	player.add_to_group("local_player")
 	add_child(player)
 	player.global_position = _spawn_points[0]
-	player.died.connect(func(_k): player.queue_respawn(_pick_spawn()))
+	player.died.connect(func(_k):
+		_score_enemy += 1
+		_refresh_score()
+		_check_over()
+		player.queue_respawn(_pick_spawn()))
 
 func _build_bots() -> void:
 	for i in BOT_COUNT:
@@ -94,7 +108,53 @@ func _build_hud() -> void:
 
 func _on_bot_died(nm: String) -> void:
 	player.kills += 1
+	_score_self += 1
 	hud.push_kill("击倒 %s" % nm)
+	_refresh_score()
+	_check_over()
+
+# ------------------------------------------------------------------ 比分 / 时间
+func _refresh_score() -> void:
+	if hud == null:
+		return
+	var t := int(maxf(0.0, _time_left))
+	hud.set_score("我方 %d : %d 敌方    %02d:%02d" % [
+			_score_self, _score_enemy, t / 60, t % 60])
+
+func _check_over() -> void:
+	if _over:
+		return
+	if _score_self >= WIN_SCORE:
+		_finish("胜利！  %d : %d" % [_score_self, _score_enemy])
+	elif _score_enemy >= WIN_SCORE:
+		_finish("失败…  %d : %d" % [_score_self, _score_enemy])
+
+func _finish(text: String) -> void:
+	_over = true
+	set_process(false)
+	set_physics_process(false)
+	for b in _bots:
+		b.set_physics_process(false)
+	hud.notice.text = text
+	Sfx.play("transition")
+	await get_tree().create_timer(5.0).timeout
+	Trans.goto("res://scenes/MainMenu.tscn")
+
+func _process(delta: float) -> void:
+	if _over:
+		return
+	_time_left -= delta
+	if _time_left <= 0.0:
+		_time_left = 0.0
+		_refresh_score()
+		if _score_self > _score_enemy:
+			_finish("时间到 · 胜利！  %d : %d" % [_score_self, _score_enemy])
+		elif _score_self < _score_enemy:
+			_finish("时间到 · 失败…  %d : %d" % [_score_self, _score_enemy])
+		else:
+			_finish("时间到 · 平局  %d : %d" % [_score_self, _score_enemy])
+		return
+	_refresh_score()
 
 func _pick_spawn() -> Vector3:
 	var best := _spawn_points[0]

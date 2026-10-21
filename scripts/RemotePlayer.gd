@@ -13,6 +13,9 @@ var _target_pos: Vector3 = Vector3.ZERO
 var _target_yaw: float = 0.0
 var _shoot_t: float = 0.0
 var _bob: float = 0.0
+var _anim_t: float = 0.0
+var _speed: float = 0.0
+var _prev_pos: Vector3 = Vector3.ZERO
 var _moving: int = 0
 
 var model: Node3D
@@ -30,6 +33,7 @@ func _ready() -> void:
 	add_to_group("entity")
 	add_to_group("remote_player")
 	_build()
+	_prev_pos = global_position
 
 func _setup(pid: int, nm: String) -> void:
 	player_id = pid
@@ -51,8 +55,7 @@ func _build() -> void:
 	hb.add_child(cs)
 	add_child(hb)
 
-	model = ModelFactory.build_soldier(Color(0.28, 0.36, 0.52), Color(0.20, 0.26, 0.38),
-			Color(0.30, 0.38, 0.52))
+	model = ModelFactory.build_soldier()
 	add_child(model)
 	_rig = model.get_meta("rig")
 	_legs = model.get_meta("legs")
@@ -139,13 +142,14 @@ func _process(delta: float) -> void:
 	global_position = global_position.lerp(_target_pos, 1.0 - exp(-14.0 * delta))
 	rotation.y = lerp_angle(rotation.y, _target_yaw + PI, 1.0 - exp(-16.0 * delta))
 
-	var planar := Vector2(_target_pos.x - global_position.x, _target_pos.z - global_position.z).length()
-	if _moving != 0 or planar > 0.15:
-		_bob += delta * 8.0
-		var sw := sin(_bob) * 0.5
-		if _legs != null:
-			for c in _legs.get_children():
-				c.rotation.x = sw if c.position.x < 0 else -sw
+	# 跑动动画：速度按插值后的实际位移估算
+	var step := global_position.distance_to(_prev_pos) / maxf(delta, 0.0001)
+	_prev_pos = global_position
+	_speed = lerpf(_speed, step, 1.0 - exp(-8.0 * delta))
+	_anim_t += delta * _speed
+	ModelFactory.animate_rig(model, _speed, _anim_t, false)
+	# 血条每帧同步，杜绝「看着还有半管血却突然死了」
+	_update_hp_bar()
 
 	if _shoot_t > 0.0:
 		_shoot_t -= delta
@@ -166,8 +170,14 @@ func _update_hp_bar() -> void:
 	fill.position.x = -(1.0 - r) * 0.47
 	_hp_bar.visible = alive
 
-## 本地射线命中远端玩家：不自行扣血，上报服务器仲裁
+## 本地射线命中远端玩家：上报服务器仲裁，同时做「乐观预测」——
+## 立刻在本地扣血刷新血条，否则要等服务器回包血条才动，
+## 表现上就是「看着还剩半管血，对方却突然死了」。
+## 服务器快照回来会覆盖这里的预测值，所以不会算错。
 func take_damage(amount: float, _from: Node = null, _is_head: bool = false) -> void:
 	if not alive:
 		return
 	Net.send_hit(player_id, int(amount))
+	# 预测值最低留 1 点，避免服务器还没确认就把人显示成死亡
+	hp = maxf(1.0, hp - amount)
+	_update_hp_bar()

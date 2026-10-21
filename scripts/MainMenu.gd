@@ -11,6 +11,10 @@ func _ready() -> void:
 	_build_ui()
 	_settings = SettingsPanel.new()
 	add_child(_settings)
+	# 大厅随机背景音乐（把音频文件放进 assets/music/ 即可，见 README）
+	Music.play_lobby()
+	# 每次启动比对云端版本，已是最新版则提示一次
+	Updater.check(true)
 
 func _build_bg() -> void:
 	_bg = Control.new()
@@ -88,7 +92,7 @@ func _build_ui() -> void:
 	left.add_child(spacer)
 
 	var foot := Label.new()
-	foot.text = "xfan.games.gun   v0.1.0"
+	foot.text = "xfan.games.gun   v0.1.1"
 	foot.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	foot.add_theme_font_size_override("font_size", 20)
 	foot.add_theme_color_override("font_color", Color(0.42, 0.46, 0.54))

@@ -1,0 +1,11 @@
+{
+  "_comment": "把这个文件上传到任意可公网访问的地址，再把 scripts/GameSettings.gd 里的 UPDATE_JSON_URL 改成该地址即可。app 每次启动都会比对 version 字段。",
+  "version": "0.1.1",
+  "code": 2,
+  "force": false,
+  "url": "https://example.com/breakbind/breakbind-battlefield-0.1.1.apk",
+  "title": "破绷战场 v0.1.1",
+  "notes": "1. 横屏 1280x720 基准\n2. 准星自定义与控件自定义\n3. 治疗物（绷带 / 急救包 / 能量饮料）与近战武器\n4. 服务器列表：延迟与在线人数\n5. 应用内更新、大厅音乐、真实加载动画\n6. 修复敌方血条滞后与中央斜坡异常",
+  "size": "18.4MB",
+  "publish": "2026-10-21"
+}

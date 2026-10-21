@@ -176,6 +176,15 @@ class Server:
         t = msg.get("t")
         pid = self.by_addr.get(addr)
 
+        # 服务器列表查询：无需加入即可拿到延迟与在线人数
+        if t == "query":
+            with self._lock:
+                online = len(self.players)
+            self.send(addr, {"t": "status", "ts": msg.get("ts", 0),
+                             "online": online, "max": self.max_players,
+                             "tick": self.tick})
+            return
+
         if t == "join":
             self._on_join(msg, addr)
             return

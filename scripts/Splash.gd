@@ -142,5 +142,6 @@ func _finish() -> void:
 	if _done:
 		return
 	_done = true
-	print("[Splash] 开屏结束，进入模式选择")
-	Trans.goto("res://scenes/MainMenu.tscn")
+	print("[Splash] 开屏结束 -> 真实加载动画")
+	# 开屏视频 / 图片播完之后，才显示加载动画（进度为真实加载进度）
+	Loading.goto("res://scenes/MainMenu.tscn")
