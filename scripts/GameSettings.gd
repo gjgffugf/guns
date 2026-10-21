@@ -61,15 +61,16 @@ var servers: Array = []
 
 # ---------------------------------------------------------------- 更新
 ## ★ 修改这里即可更换云端版本配置地址
-const UPDATE_JSON_URL := "https://xfan-gun.ffurry.cc.cd/update.json"
+const UPDATE_JSON_URL := "https://example.com/breakbind/version.json"
 const CURRENT_VERSION := "0.1.1"
 const APP_NAME := "破绷战场"
 const PACKAGE_NAME := "xfan.games.gun"
 ## ★ 修改这里即可更换「关于」页的介绍文字
-const ABOUT_INTRO := "破绷战场 —— 一款阴间的不知道好不好玩的游戏。\n"
+const ABOUT_INTRO := "破绷战场 —— 一款横屏移动端 FPS。\n"
 const ABOUT_LINES: Array[String] = [
-	"代号 gugugaga",
-	"支持不知道awa",
+	"代号 BreakBind Battlefield，包名 xfan.games.gun。",
+	"支持单人训练与自建服务器联机，模型与音效均由代码生成。",
+	"本页文案可在 scripts/GameSettings.gd 的 ABOUT_LINES 中修改。",
 ]
 
 var _reapply_t: float = 0.0

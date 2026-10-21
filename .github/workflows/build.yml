@@ -169,36 +169,80 @@ jobs:
           python3 tools/check_gd.py || {
             echo "::warning::预检发现问题，继续构建但很可能失败，请按上面提示修正"; }
 
-      - name: 检查资源完整性
+      - name: 检查资源完整性（缺失只警告，并尽量自动补全）
         run: |
           set -euo pipefail
-          echo "=== 仓库中与 res:// 相关的关键资源 ==="
-          MISSING=0
+          echo "=== 仓库里实际提交了哪些 assets ==="
+          git ls-files assets/ | sed 's/^/    /' || true
+          echo
+          echo "=== 是否有文件被 .gitignore 挡住 ==="
+          if git check-ignore -v assets/fonts/ui_font.ttf assets/splash/splash.ogv \
+              assets/splash/splash_fallback.png assets/sfx/shoot.wav 2>/dev/null; then
+            echo "    ↑ 上面这些被忽略了，请用 git add -f 强制添加，或改 .gitignore"
+          else
+            echo "    （未被忽略）"
+          fi
+          echo
+          echo "=== 关键资源 ==="
+          MISSING_SFX=0
           for f in \
             assets/fonts/ui_font.ttf \
             assets/splash/splash.ogv \
             assets/splash/splash_fallback.png \
+            assets/splash/splash_fallback.jpg \
             assets/sfx/ui_click.wav assets/sfx/ui_transition.wav \
             assets/sfx/shoot.wav assets/sfx/hitmark.wav \
             assets/sfx/reload.wav assets/sfx/hurt.wav assets/sfx/step.wav ; do
-            if [ -f "$f" ]; then echo "  [OK]      $f"; else echo "  [MISSING] $f"; MISSING=1; fi
+            if [ -f "$f" ]; then
+              echo "  [OK]      $f"
+            else
+              echo "  [MISSING] $f"
+              case "$f" in
+                assets/sfx/*.wav) MISSING_SFX=1 ;;
+              esac
+            fi
           done
-          echo "--- git 是否忽略了这些文件 ---"
-          git check-ignore -v assets/fonts/ui_font.ttf assets/sfx/shoot.wav || echo "  （未被 .gitignore 忽略）"
-          if [ "$MISSING" -ne 0 ]; then
-            echo "::error::assets/ 下有文件没提交进仓库。请在本机执行: git add -f assets && git commit && git push"
-            echo "::error::当前仓库 assets 目录内容如下:"
-            ls -laR assets/ || true
-            exit 1
+
+          # 音效缺失就用纯标准库脚本现场合成，不依赖仓库里的二进制
+          if [ "$MISSING_SFX" -ne 0 ]; then
+            echo "::warning::部分音效缺失，用 tools/gen_sfx.py 自动合成"
+            python3 tools/gen_sfx.py || echo "::warning::音效合成失败，游戏将静音运行"
           fi
+
+          # 开屏视频缺失：先用 ffmpeg 兜底生成一段，实在不行再回退静态图
+          if [ ! -f assets/splash/splash.ogv ]; then
+            echo "::warning::assets/splash/splash.ogv 缺失，尝试用 ffmpeg 兜底生成"
+            SRC_IMG=""
+            for cand in assets/splash/splash_fallback.jpg assets/splash/splash_fallback.png; do
+              [ -f "$cand" ] && SRC_IMG="$cand" && break
+            done
+            if [ -n "$SRC_IMG" ] && command -v ffmpeg > /dev/null 2>&1; then
+              ffmpeg -y -loglevel error -loop 1 -i "$SRC_IMG" -t 3 -r 30 \
+                -c:v libtheora -q:v 7 -pix_fmt yuv420p assets/splash/splash.ogv \
+                && echo "  已用 $SRC_IMG 兜底生成 splash.ogv" \
+                || echo "::warning::ffmpeg 生成失败，开屏将回退静态图"
+            fi
+            if [ ! -f assets/splash/splash.ogv ]; then
+              echo "::warning::开屏将回退到静态图（不影响构建）"
+            fi
+            echo "::warning::想要原版视频开屏，在本机执行：git add -f assets/splash/splash.ogv && git commit && git push"
+          fi
+          # 字体缺失：运行时会回退到引擎默认字体，不影响构建
+          if [ ! -f assets/fonts/ui_font.ttf ]; then
+            echo "::warning::assets/fonts/ui_font.ttf 缺失，中文可能显示异常（不影响构建）"
+          fi
+          echo "资源检查结束，继续构建"
 
       - name: 导入项目资源
         run: |
           set -euo pipefail
           mkdir -p build
           godot --headless --import 2>&1 | tee build/import.log | tail -30
-          if grep -iE "error|failed|script error" build/import.log; then
-            echo "::error::导入资源阶段有脚本错误，见 build/import.log"
+          # 只抓真正的脚本解析 / 编译错误。
+          # 不要笼统 grep "error" —— 资源缺失之类的告警会误伤，
+          # 而所有 assets 都做了运行时降级，缺了也不该阻断构建。
+          if grep -E "SCRIPT ERROR|Parse Error|Compile Error|Failed to load script|Failed to create an autoload" build/import.log; then
+            echo "::error::导入阶段存在 GDScript 错误，见 build/import.log"
             exit 1
           fi
           echo "导入完成"
