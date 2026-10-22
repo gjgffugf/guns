@@ -52,6 +52,18 @@ var _proxies: Dictionary = {}
 
 func _ready() -> void:
 	layer = 60
+	# 与 Hud 同理：跟随 viewport 的 stretch 变换，
+	# 让面板内部的 Control 坐标与触摸事件坐标处在同一坐标系。
+	# 属性名 4.x 是 ..._enabled（3.x 才是 ..._enable），探测一下避免写错。
+	for _pn in ["follow_viewport_enabled", "follow_viewport_enable"]:
+		var _found := false
+		for d in get_property_list():
+			if str(d["name"]) == _pn:
+				_found = true
+				break
+		if _found:
+			set(_pn, true)
+			break
 	visible = false
 	_build()
 
@@ -119,14 +131,24 @@ func _build() -> void:
 	var dim := ColorRect.new()
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	dim.color = Color(0, 0, 0, 0.62)
+	# 必须显式设成 STOP：ColorRect 默认是 IGNORE，
+	# 那样它既收不到 gui_input（点面板外关不掉），
+	# 事件还会穿透到下层 HUD，变成"在设置界面点一下就开枪"。
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
 	dim.gui_input.connect(func(e):
 		if e is InputEventScreenTouch and e.pressed:
+			close()
+		elif e is InputEventMouseButton and e.pressed \
+				and e.button_index == MOUSE_BUTTON_LEFT:
 			close()
 	)
 	add_child(dim)
 
 	var center := CenterContainer.new()
 	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	# 让事件穿过容器落到 dim 上；面板本身及其按钮仍是 STOP，
+	# 所以面板内部的点击照常工作，只有面板外的空白才会关掉面板。
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(center)
 
 	_panel = PanelContainer.new()

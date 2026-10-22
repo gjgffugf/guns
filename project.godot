@@ -143,3 +143,8 @@ gdscript/warnings/unsafe_loop_iteration=1
 gdscript/warnings/incompatible_ternary=1
 gdscript/warnings/narrowing_conversion=1
 gdscript/warnings/return_value_discarded=0
+
+[input_devices]
+
+pointing/emulate_mouse_from_touch=false
+pointing/emulate_touch_from_mouse=false

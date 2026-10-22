@@ -62,6 +62,18 @@ var _last_vp := Vector2.ZERO
 
 func _ready() -> void:
 	layer = 10
+	# 关键：CanvasLayer 默认 follow_viewport_enabled=false，不跟随 viewport 的
+	# stretch 变换，于是它内部用的是「窗口物理像素」，而触摸事件坐标和
+	# Control 布局用的是「stretch 之后的逻辑像素」。两套坐标系不一致，
+	# 控件就会被摆到错误位置（挤在左上区域、尺寸偏小，看起来像"没有控件"）。
+	# 打开跟随后，三者统一，控件位置和命中测试才对得上。
+	#
+	# 属性名在 4.x 是 follow_viewport_enabled（3.x 才是 ..._enable），
+	# 这里用属性表探测，避免版本差异写错名字导致运行时报错。
+	for _pn in ["follow_viewport_enabled", "follow_viewport_enable"]:
+		if _has_prop(_pn):
+			set(_pn, true)
+			break
 	_build()
 	# _ready 时视口尺寸在 Android 上常常还没稳定（甚至为 0），
 	# 只在这里摆一次会让所有控件 size=0 而彻底看不见。
@@ -110,6 +122,7 @@ func _build() -> void:
 	# ---- 雷达（左上角）----
 	minimap = Minimap.new()
 	minimap.setup(60.0)
+	minimap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_tl(minimap, 14, 14, 150, 150)
 	minimap.visible = false          # 默认关，由具体模式决定是否开启
 	root.add_child(minimap)
@@ -183,6 +196,7 @@ func _build() -> void:
 	hp_bar.max_value = 100
 	hp_bar.value = 100
 	hp_bar.show_percentage = false
+	hp_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hp_bar.custom_minimum_size = Vector2(420, 30)
 	hp_row.add_child(hp_bar)
 	_style_bar(hp_bar, Color(0.2, 0.75, 0.35), Color(0.10, 0.11, 0.13))
@@ -193,6 +207,7 @@ func _build() -> void:
 	hp_text.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
 	hp_text.add_theme_constant_override("outline_size", 5)
 	hp_text.custom_minimum_size = Vector2(60, 0)
+	hp_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hp_row.add_child(hp_text)
 
 	# 弹药量：屏幕底部正中
@@ -264,6 +279,7 @@ func _build() -> void:
 	# ---- 使用治疗物：倒计时 + 取消 ----
 	_use_lbl = Label.new()
 	_tc(_use_lbl, 520, 210, 40)
+	_use_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_use_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_use_lbl.add_theme_font_size_override("font_size", 34)
 	_use_lbl.add_theme_color_override("font_color", Color(0.6, 1.0, 0.7))
@@ -273,6 +289,7 @@ func _build() -> void:
 
 	_use_bar = ProgressBar.new()
 	_tc(_use_bar, 420, 258, 18)
+	_use_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_use_bar.max_value = 100
 	_use_bar.show_percentage = false
 	var fs := StyleBoxFlat.new()
@@ -414,13 +431,39 @@ func relayout() -> void:
 ## 错误的位置 —— 表现就是控件挤在一角/看不见，或者开火键跑到屏幕中间，
 ## 点哪都在开枪、找不到空白区转视角。
 ## 根节点是 FULL_RECT，它的 size 与触摸事件坐标天然同一坐标系，最可靠。
+## 属性探测（兼容不同 Godot 版本的命名差异）
+func _has_prop(name: String) -> bool:
+	for d in get_property_list():
+		if str(d["name"]) == name:
+			return true
+	return false
+
+## 把「触摸事件坐标」转换到 CanvasLayer 内部坐标系。
+##
+## InputEventScreenTouch/Drag 的 position 是 viewport 坐标系，
+## 而控件摆在 CanvasLayer 的内部坐标系里。get_final_transform() 正是
+## 「CanvasLayer -> Viewport」的变换，取逆即可反推回来。
+## 有了这一步，无论 follow_viewport 是否生效、stretch 怎么配，
+## 命中测试都能对得上。
+func _to_local(p: Vector2) -> Vector2:
+	var xf := get_final_transform()
+	if xf == null:
+		return p
+	return xf.affine_inverse() * p
+
 func _vp() -> Vector2:
+	# 优先级：根节点实际尺寸 > 视口逻辑尺寸 > 窗口物理尺寸 > 设计分辨率。
+	# CanvasLayer 跟随视口后，前两者应当一致；后面几级只是防止极端情况
+	# 拿到 0 导致控件尺寸为 0 而"消失"。
 	if _root != null and _root.size.x > 1.0 and _root.size.y > 1.0:
 		return _root.size
+	var vr := get_viewport().get_visible_rect().size
+	if vr.x > 1.0 and vr.y > 1.0:
+		return vr
 	var w := DisplayServer.window_get_size()
 	if w.x > 1.0 and w.y > 1.0:
 		return Vector2(w)
-	return get_viewport().get_visible_rect().size
+	return Vector2(1280.0, 720.0)
 
 ## 尺寸变了就重新摆一次；每帧检测，成本可以忽略
 func _ensure_layout() -> void:
@@ -431,42 +474,69 @@ func _ensure_layout() -> void:
 		return
 	_last_vp = vp
 	relayout()
-	# 排错用：把几个关键控件的实际矩形打出来，
-	# 万一还有"控件不显示/点哪都在开火"，看这一行就能定位
-	print("[Hud] 布局已应用 vp=%s  摇杆=%s  开火=%s" % [
-			vp, TouchLayout.rect_of("stick", vp), TouchLayout.rect_of("fire", vp)])
+	# 排错用：把坐标系和关键控件的实际矩形打出来。
+	# 如果还出现"控件不显示 / 点哪都开火"，看这几行就能定位：
+	#   - vp 应该接近 1280x720（逻辑分辨率），若变成 2340x1080 之类说明没跟随视口
+	#   - 开火键矩形应落在 vp 右下角
+	print("[Hud] vp=%s  viewport=%s  变换缩放=%s" % [
+			vp, get_viewport().get_visible_rect().size, get_final_transform().get_scale()])
+	print("[Hud] 摇杆=%s  开火=%s" % [
+			TouchLayout.rect_of("stick", vp), TouchLayout.rect_of("fire", vp)])
 
 func _on_touch(e: InputEvent) -> void:
 	if _edit_preview:
 		return
+	var vp := _vp()
+	# 触摸事件坐标是 viewport 坐标系，必须先转到 CanvasLayer 内部坐标系
+	# 再去做命中测试，否则永远命中不到，点哪都变成"空白区"
+	var lp := _to_local(e.position)
 	if e is InputEventScreenTouch:
 		if e.pressed:
-			var k := TouchLayout.hit(_vp(), e.position)
-			_route_down(k, e)
+			_route_down(TouchLayout.hit(vp, lp), e, lp)
 		else:
 			_route_up(e.index)
+		# 消费掉，别再往 _unhandled_input 传，否则会被当成鼠标左键再次触发开火
+		get_viewport().set_input_as_handled()
 	elif e is InputEventScreenDrag:
 		if e.index == _stick_idx:
-			_update_stick(e.position)
+			_update_stick(lp)
 		elif e.index == _fire_idx:
 			pass    # 长按后滑动仍然持续开火，不中断
 		elif e.index == _look_idx:
 			if player != null:
-				player.add_look(e.relative * 0.0055 * GameSettings.sensitivity)
+				# 旋转量不受平移影响，但缩放要还原，否则高 DPI 下转视角过快/过慢
+				var sc := _look_scale()
+				player.add_look(e.relative * 0.0055 * GameSettings.sensitivity * sc)
+		get_viewport().set_input_as_handled()
 	elif e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
+		# 桌面调试用（project.godot 里已关掉触摸模拟鼠标）
 		if e.pressed:
-			_route_down(TouchLayout.hit(_vp(), e.position), e)
+			_route_down(TouchLayout.hit(vp, lp), e, lp)
 		else:
 			_route_up(0)
+		get_viewport().set_input_as_handled()
 	elif e is InputEventMouseMotion:
 		if _stick_idx == 0:
-			_update_stick(e.position)
+			_update_stick(lp)
 		elif _look_idx == 0:
 			if player != null:
-				player.add_look(e.relative * 0.0055 * GameSettings.sensitivity)
+				player.add_look(e.relative * 0.0055 * GameSettings.sensitivity * _look_scale())
 
-func _route_down(k: String, e: InputEvent) -> void:
+## 拖拽增量是 viewport 坐标，而 CanvasLayer 跟随视口后缩放已统一，
+## 这里只在极端情况下做一次归一化，避免高 DPI 屏转视角手感突变
+func _look_scale() -> float:
+	var xf := get_final_transform()
+	if xf == null:
+		return 1.0
+	var sx := absf(xf.get_scale().x)
+	if sx < 0.001:
+		return 1.0
+	return 1.0 / sx
+
+## lp：已经转换到 CanvasLayer 内部坐标系的触点位置
+func _route_down(k: String, e: InputEvent, lp: Vector2 = Vector2.ZERO) -> void:
 	var idx: int = int(e.get("index", 0)) if e is InputEventScreenTouch else 0
+	var pos := lp if lp != Vector2.ZERO else _to_local(e.position)
 	# 视角登记必须放在 player 判空之前：否则 player 还没绑定时
 	# 整个 _look_idx 都设不上，拖动就完全转不了视角。
 	# 开火键也登记进来，这样「长按开火 + 滑动瞄准」才成立。
@@ -477,7 +547,7 @@ func _route_down(k: String, e: InputEvent) -> void:
 	match k:
 		"stick":
 			_stick_idx = idx
-			_update_stick(e.position)
+			_update_stick(pos)
 		"fire":
 			_fire_idx = idx
 			player.want_fire = true
@@ -496,7 +566,7 @@ func _route_down(k: String, e: InputEvent) -> void:
 		"melee":
 			player.toggle_weapon()
 		"heal":
-			var local := e.position - _heal_root.position
+			var local := pos - _heal_root.position
 			if local.y < _heal_circle.position.y:
 				_toggle_heal_list()
 			else:

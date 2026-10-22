@@ -139,6 +139,10 @@ var _prev_pos: Vector3
 var _curr_pos: Vector3
 
 
+## 当前设备是否带触摸屏（用于屏蔽鼠标模拟事件）
+static func _is_touch_device() -> bool:
+	return DisplayServer.is_touchscreen_available()
+
 func _ready() -> void:
 	add_to_group("entity")
 	_items = {}
@@ -319,6 +323,15 @@ func is_using_item() -> bool:
 # ------------------------------------------------------------------ 输入
 func _unhandled_input(e: InputEvent) -> void:
 	if not alive:
+		return
+	# 触摸设备上忽略鼠标事件。
+	#
+	# Godot 默认开启 emulate_mouse_from_touch，手指点一下会同时发出
+	# InputEventScreenTouch 和 InputEventMouseButton(左键)。HUD 处理完
+	# 触摸后如果没有把事件标记为已消费，这个鼠标事件就会继续流到这里，
+	# 于是「点屏幕任何地方都变成开火」。
+	# project.godot 里已经把该选项关掉了，这里再加一道保险。
+	if _is_touch_device() and (e is InputEventMouseButton or e is InputEventMouseMotion):
 		return
 	if e is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		add_look(e.relative * 0.0022 * GameSettings.sensitivity)
