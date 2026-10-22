@@ -44,7 +44,12 @@ static func center_of(key: String, vp: Vector2) -> Vector2:
 static func size_of(key: String, vp: Vector2) -> Vector2:
 	var base: Vector2 = BASE_SIZE.get(key, Vector2(96, 96))
 	var c := GameSettings.get_ctrl(key)
-	return base * ui_scale(vp) * float(c["s"])
+	var sc := ui_scale(vp)
+	# 视口尺寸还没就绪时 sc 会是 0，控件就变成 0 大小彻底看不见了。
+	# 至少给个基础尺寸撑住，等尺寸稳定后再按真实比例重摆一次。
+	if sc < 0.2:
+		sc = 1.0
+	return base * sc * float(c["s"])
 
 static func alpha_of(key: String) -> float:
 	var c := GameSettings.get_ctrl(key)
@@ -65,9 +70,16 @@ static func rect_of(key: String, vp: Vector2) -> Rect2:
 	return Rect2(c - s / 2.0, s)
 
 ## 命中测试：返回控件名，没有则返回 ""
+## 命中测试：返回控件名，没有则返回 ""
+## 尺寸无效的控件直接跳过 —— 否则零尺寸矩形可能把点击吞掉或误判
 static func hit(vp: Vector2, point: Vector2) -> String:
+	if vp.x < 2.0 or vp.y < 2.0:
+		return ""
 	for k in GameSettings.CONTROL_KEYS:
-		if rect_of(k, vp).has_point(point):
+		var r := rect_of(k, vp)
+		if r.size.x < 4.0 or r.size.y < 4.0:
+			continue
+		if r.has_point(point):
 			return k
 	return ""
 

@@ -45,6 +45,8 @@ var _ed_tip: Label
 var _ed_sel: String = ""
 var _ed_drag: bool = false
 var _ed_off: Vector2 = Vector2.ZERO
+var _ed_grab: Control                 # 画布级事件接收层（坐标系静止）
+var _ed_finger: int = -1              # 正在拖动的手指 index
 var _proxies: Dictionary = {}
 
 
@@ -574,13 +576,28 @@ func _build_ctrl_page() -> Control:
 	_ed_canvas = Control.new()
 	_ed_canvas.custom_minimum_size = Vector2(0, 330)
 	_ed_canvas.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	# 面板初始是隐藏的，隐藏时容器不会布局，画布尺寸为 0；
+	# 等它真正有尺寸了再摆一次
+	_ed_canvas.resized.connect(func(): _rebuild_proxies())
 	holder.add_child(_ed_canvas)
+
+	# 所有拖动/点击统一由这一层接收。
+	# 之前把 gui_input 挂在代理按钮上：按钮会跟着手指移动，
+	# 于是「手指相对按钮的局部坐标」恒定不变，位移差永远是 0 —— 怎么都拖不动。
+	# 这一层是静止的全屏画布，坐标基准稳定，拖动才成立。
+	_ed_grab = Control.new()
+	_ed_grab.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_ed_grab.mouse_filter = Control.MOUSE_FILTER_STOP
+	_ed_grab.gui_input.connect(_on_canvas_input)
+	_ed_canvas.add_child(_ed_grab)
 	return v
 
 func _rebuild_proxies() -> void:
 	if _ed_canvas == null:
 		return
 	for c in _ed_canvas.get_children():
+		if c == _ed_grab:
+			continue          # 事件层不能被清掉
 		c.queue_free()
 	_proxies.clear()
 	for k in GameSettings.CONTROL_KEYS:
@@ -600,56 +617,85 @@ func _rebuild_proxies() -> void:
 		sel.bg_color = Color(0.90, 0.30, 0.28, 0.95)
 		sel.border_color = Color(1, 1, 1, 1.0)
 		b.add_theme_stylebox_override("pressed", sel)
-		b.gui_input.connect(func(e): _proxy_input(k, e))
+		# 只负责显示，事件一律交给静止的 grab 层
+		b.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_ed_canvas.add_child(b)
 		_proxies[k] = b
 		_place_proxy(k)
 
-func _proxy_input(k: String, e: InputEvent) -> void:
+func _on_canvas_input(e: InputEvent) -> void:
+	var sz := _ed_canvas.size
+	if sz.x < 2.0 or sz.y < 2.0:
+		return
 	if e is InputEventScreenTouch:
 		if e.pressed:
-			_ed_sel = k
-			_ed_drag = true
+			var k := _hit_canvas(e.position)
+			_ed_finger = e.index
+			_ed_drag = (k != "")
 			_ed_off = e.position
-			var d := GameSettings.get_ctrl(k)
-			_ed_size.value = float(d["s"])
-			_ed_alpha.value = float(d["a"])
-			_ed_tip.text = "已选中：%s" % str(GameSettings.CONTROL_NAMES.get(k, k))
+			if k != "":
+				_ed_sel = k
+				var d := GameSettings.get_ctrl(k)
+				_ed_size.value = float(d["s"])
+				_ed_alpha.value = float(d["a"])
+				_ed_tip.text = "已选中：%s" % str(GameSettings.CONTROL_NAMES.get(k, k))
+			else:
+				_ed_tip.text = "拖动摆放，点击选中后可调大小与透明度"
 			_highlight()
 		else:
 			_ed_drag = false
-	elif e is InputEventScreenDrag and _ed_drag and _ed_sel == k:
-		var sz := _ed_canvas.size
-		if sz.x <= 0.0 or sz.y <= 0.0:
-			return
-		var d := GameSettings.get_ctrl(k)
-		d["x"] = clampf(float(d["x"]) + (e.position.x - _ed_off.x) / sz.x, 0.03, 0.97)
-		d["y"] = clampf(float(d["y"]) + (e.position.y - _ed_off.y) / sz.y, 0.04, 0.96)
-		_ed_off = e.position
-		GameSettings.set_ctrl(k, d)
-		_place_proxy(k)
+			_ed_finger = -1
+	elif e is InputEventScreenDrag:
+		if _ed_drag and _ed_sel != "" and e.index == _ed_finger:
+			_move_sel(e.position)
 	elif e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
 		if e.pressed:
-			_ed_sel = k
-			_ed_drag = true
+			var k2 := _hit_canvas(e.position)
+			_ed_drag = (k2 != "")
 			_ed_off = e.position
-			var d := GameSettings.get_ctrl(k)
-			_ed_size.value = float(d["s"])
-			_ed_alpha.value = float(d["a"])
-			_ed_tip.text = "已选中：%s" % str(GameSettings.CONTROL_NAMES.get(k, k))
+			if k2 != "":
+				_ed_sel = k2
+				var d2 := GameSettings.get_ctrl(k2)
+				_ed_size.value = float(d2["s"])
+				_ed_alpha.value = float(d2["a"])
+				_ed_tip.text = "已选中：%s" % str(GameSettings.CONTROL_NAMES.get(k2, k2))
 			_highlight()
 		else:
 			_ed_drag = false
-	elif e is InputEventMouseMotion and _ed_drag and _ed_sel == k:
-		var sz := _ed_canvas.size
-		if sz.x <= 0.0 or sz.y <= 0.0:
-			return
+	elif e is InputEventMouseMotion and _ed_drag and _ed_sel != "":
+		_move_sel(e.position)
+
+## 拖动增量换算：pos 与 _ed_off 都是「相对静止画布」的坐标，
+## 基准一致，差值才是手指的真实位移
+func _move_sel(pos: Vector2) -> void:
+	var sz := _ed_canvas.size
+	if sz.x < 2.0 or sz.y < 2.0:
+		return
+	var d := GameSettings.get_ctrl(_ed_sel)
+	d["x"] = clampf(float(d["x"]) + (pos.x - _ed_off.x) / sz.x, 0.03, 0.97)
+	d["y"] = clampf(float(d["y"]) + (pos.y - _ed_off.y) / sz.y, 0.04, 0.96)
+	_ed_off = pos
+	GameSettings.set_ctrl(_ed_sel, d)
+	_place_proxy(_ed_sel)
+
+## 画布坐标下的命中测试，判据与 _place_proxy 完全一致
+func _hit_canvas(p: Vector2) -> String:
+	var sz := _ed_canvas.size
+	if sz.x < 2.0 or sz.y < 2.0:
+		return ""
+	var u := minf(sz.x / 1280.0, sz.y / 720.0)
+	if u <= 0.0:
+		return ""
+	for k in GameSettings.CONTROL_KEYS:
 		var d := GameSettings.get_ctrl(k)
-		d["x"] = clampf(float(d["x"]) + (e.position.x - _ed_off.x) / sz.x, 0.03, 0.97)
-		d["y"] = clampf(float(d["y"]) + (e.position.y - _ed_off.y) / sz.y, 0.04, 0.96)
-		_ed_off = e.position
-		GameSettings.set_ctrl(k, d)
-		_place_proxy(k)
+		var base: Vector2 = TouchLayout.BASE_SIZE.get(k, Vector2(96, 96))
+		var sc := base * u * float(d["s"])
+		if sc.x < 4.0 or sc.y < 4.0:
+			continue
+		var c := Vector2(float(d["x"]) * sz.x, float(d["y"]) * sz.y)
+		if Rect2(c - sc / 2.0, sc).has_point(p):
+			return k
+	return ""
 
 ## 把代理按钮摆到存档位置（画布坐标 = 屏幕比例）
 func _place_proxy(k: String) -> void:
@@ -657,8 +703,11 @@ func _place_proxy(k: String) -> void:
 		return
 	var b: Button = _proxies[k]
 	var sz := _ed_canvas.size
-	if sz.x <= 0.0:
-		return
+	# 面板还没显示时容器不布局、画布尺寸为 0。
+	# 这时如果直接 return，所有代理会堆在 (0,0) 且尺寸为 0，看上去就是"移不动"。
+	# 给一个备用画布尺寸，保证按钮至少是可见、可摆的。
+	if sz.x < 2.0 or sz.y < 2.0:
+		sz = Vector2(960.0, 330.0)
 	var u := minf(sz.x / 1280.0, sz.y / 720.0)
 	var d := GameSettings.get_ctrl(k)
 	var base: Vector2 = TouchLayout.BASE_SIZE.get(k, Vector2(96, 96))
@@ -757,6 +806,9 @@ func open_panel() -> void:
 	_vol_val.text = "%d%%" % int(GameSettings.master_volume * 100)
 	_sync_cross()
 	visible = true
+	# 面板之前是隐藏的，容器不会给画布算尺寸。
+	# 显示之后等一帧布局完成，再把「自定义控件」页按真实尺寸摆一次。
+	_rebuild_proxies.call_deferred()
 	_panel.scale = Vector2(0.9, 0.9)
 	_panel.modulate.a = 0.0
 	_panel.pivot_offset = _panel.size / 2.0

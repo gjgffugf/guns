@@ -57,10 +57,18 @@ var _cancel_btn: Button
 var _scope: Control
 var _scope_tex: ImageTexture
 var _damage_layer: Control
+var _root: Control                 # FULL_RECT 根节点，它的 size 就是本层真实坐标系
+var _last_vp := Vector2.ZERO
 
 func _ready() -> void:
 	layer = 10
 	_build()
+	# _ready 时视口尺寸在 Android 上常常还没稳定（甚至为 0），
+	# 只在这里摆一次会让所有控件 size=0 而彻底看不见。
+	# 这里补一次，并持续监听尺寸变化。
+	_ensure_layout.call_deferred()
+	if _root != null:
+		_root.resized.connect(func(): _ensure_layout())
 
 # ------------------------------------------------------------------ 布局助手
 static func _rect(c: Control, ax0: float, ay0: float, ax1: float, ay1: float,
@@ -97,6 +105,7 @@ func _build() -> void:
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(root)
+	_root = root
 
 	# ---- 雷达（左上角）----
 	minimap = Minimap.new()
@@ -378,7 +387,7 @@ func _build_heal(root: Control) -> void:
 
 ## 把存档里的位置 / 大小 / 透明度应用到所有触摸控件
 func relayout() -> void:
-	var vp := get_viewport().get_visible_rect().size
+	var vp := _vp()
 	for k in _btns:
 		var c := _btns[k] as Control
 		TouchLayout.apply(c, k, vp)
@@ -396,8 +405,36 @@ func relayout() -> void:
 		_stick_knob.queue_redraw()
 
 # ------------------------------------------------------------------ 输入
+## 本层控件与触摸事件所处的真实坐标系尺寸。
+##
+## 不能直接用 get_viewport().get_visible_rect()：
+## Hud 是 CanvasLayer，而 Godot 4 里 CanvasLayer 默认不跟随 viewport 的
+## stretch 变换，它用的是「窗口物理像素」；而 get_visible_rect() 返回的是
+## 除以 stretch_scale 之后的逻辑尺寸。两者不一致时，所有控件都会被摆到
+## 错误的位置 —— 表现就是控件挤在一角/看不见，或者开火键跑到屏幕中间，
+## 点哪都在开枪、找不到空白区转视角。
+## 根节点是 FULL_RECT，它的 size 与触摸事件坐标天然同一坐标系，最可靠。
 func _vp() -> Vector2:
+	if _root != null and _root.size.x > 1.0 and _root.size.y > 1.0:
+		return _root.size
+	var w := DisplayServer.window_get_size()
+	if w.x > 1.0 and w.y > 1.0:
+		return Vector2(w)
 	return get_viewport().get_visible_rect().size
+
+## 尺寸变了就重新摆一次；每帧检测，成本可以忽略
+func _ensure_layout() -> void:
+	var vp := _vp()
+	if vp.x < 2.0 or vp.y < 2.0:
+		return
+	if vp.is_equal_approx(_last_vp):
+		return
+	_last_vp = vp
+	relayout()
+	# 排错用：把几个关键控件的实际矩形打出来，
+	# 万一还有"控件不显示/点哪都在开火"，看这一行就能定位
+	print("[Hud] 布局已应用 vp=%s  摇杆=%s  开火=%s" % [
+			vp, TouchLayout.rect_of("stick", vp), TouchLayout.rect_of("fire", vp)])
 
 func _on_touch(e: InputEvent) -> void:
 	if _edit_preview:
@@ -430,6 +467,11 @@ func _on_touch(e: InputEvent) -> void:
 
 func _route_down(k: String, e: InputEvent) -> void:
 	var idx: int = int(e.get("index", 0)) if e is InputEventScreenTouch else 0
+	# 视角登记必须放在 player 判空之前：否则 player 还没绑定时
+	# 整个 _look_idx 都设不上，拖动就完全转不了视角。
+	# 开火键也登记进来，这样「长按开火 + 滑动瞄准」才成立。
+	if k == "" or k == "fire":
+		_look_idx = idx
 	if player == null:
 		return
 	match k:
@@ -479,6 +521,10 @@ func _route_up(idx: int) -> void:
 
 func _update_stick(p: Vector2) -> void:
 	var r := _stick_area.size.x * 0.30
+	# 摇杆还没布局完时 r 会是 0，这里除零会让 move_axis 变成 NaN，
+	# 玩家会被瞬移到一个无效坐标。直接忽略这次输入。
+	if r < 1.0:
+		return
 	var d := p - (_stick_area.position + _stick_base)
 	if d.length() > r:
 		d = d.normalized() * r
@@ -692,6 +738,7 @@ func set_ping(ms: float, online: bool) -> void:
 
 # ------------------------------------------------------------------ 绘制
 func _process(delta: float) -> void:
+	_ensure_layout()
 	_fps_acc += delta
 	if _fps_acc >= 0.35:
 		_fps_acc = 0.0
