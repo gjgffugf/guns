@@ -4,6 +4,14 @@ extends Control
 var _settings: SettingsPanel
 var _bg: Control
 var _toast_lbl: Label
+## 按钮与回调登记表。触摸除了走 Button.pressed（引擎用鼠标模拟驱动），
+## 这里再补一条兜底：直接按矩形命中测试，以防某个隐藏的全屏遮罩
+## 把 GUI 事件吞掉时按钮彻底失灵。
+const KEYS: Array[String] = ["solo", "multi", "room", "gear"]
+var _btns: Array[Button] = []
+var _cbs: Array[Callable] = []
+var _lock: Dictionary = {}          # key -> 上次触发时刻，防止两条路重复触发
+var _leaving: bool = false          # 已触发转场，避免连点
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -15,6 +23,7 @@ func _ready() -> void:
 	Music.play_lobby()
 	# 每次启动比对云端版本，已是最新版则提示一次
 	Updater.check(true)
+	_audit_overlays.call_deferred()
 
 func _build_bg() -> void:
 	_bg = Control.new()
@@ -65,6 +74,9 @@ func _build_ui() -> void:
 	root.add_child(left)
 
 	var right := VBoxContainer.new()
+	# 必须 IGNORE：容器默认是 STOP，按钮之间的间隙会吞掉触摸，
+	# 看起来就像"点了没反应"
+	right.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	right.custom_minimum_size = Vector2(500, 0)
 	right.add_theme_constant_override("separation", 18)
 	right.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -99,17 +111,16 @@ func _build_ui() -> void:
 	left.add_child(foot)
 
 	# ---- 右侧：模式按钮 ----
-	right.add_child(_mode_button("单 人 模 式", "离线训练场 · 含 1 名战术人机",
+	right.add_child(_mode_button("solo", "单 人 模 式", "离线训练场 · 含 1 名战术人机",
 			Color(0.72, 0.16, 0.18), func():
 		Trans.goto("res://scenes/Game.tscn", "正在载入训练场")
 	))
-	right.add_child(_mode_button("多 人 模 式", "连接自建服务器 · 联机对战",
+	right.add_child(_mode_button("multi", "多 人 模 式", "连接自建服务器 · 联机对战",
 			Color(0.16, 0.38, 0.62), func():
 		Trans.goto("res://scenes/MultiplayerMenu.tscn", "正在连接配置")
 	))
-	right.add_child(_mode_button("开 房 间", "功能开发中 · 敬请期待",
+	right.add_child(_mode_button("room", "开 房 间", "功能开发中 · 敬请期待",
 			Color(0.24, 0.26, 0.30), func():
-		Sfx.play("click")
 		_toast("开房间功能暂未开放")
 	))
 
@@ -137,10 +148,13 @@ func _build_ui() -> void:
 	var p := n.duplicate() as StyleBoxFlat
 	p.bg_color = Color(0.32, 0.14, 0.16, 0.95)
 	gear.add_theme_stylebox_override("pressed", p)
-	gear.pressed.connect(func(): _settings.open_panel())
+	gear.pressed.connect(func(): _activate("gear"))
 	add_child(gear)
+	_btns.append(gear)
+	_cbs.append(func(): _settings.open_panel())
 
-func _mode_button(title: String, desc: String, col: Color, cb: Callable) -> Button:
+func _mode_button(key: String, title: String, desc: String, col: Color,
+		cb: Callable) -> Button:
 	var b := Button.new()
 	b.custom_minimum_size = Vector2(0, 104)
 	var sb := StyleBoxFlat.new()
@@ -179,11 +193,97 @@ func _mode_button(title: String, desc: String, col: Color, cb: Callable) -> Butt
 	d.add_theme_color_override("font_color", Color(0.88, 0.90, 0.94))
 	v.add_child(d)
 
-	b.pressed.connect(func():
-		Sfx.play("click", 2.0)
-		cb.call()
-	)
+	# 登记到兜底表，并让 pressed 走同一个去重入口
+	_btns.append(b)
+	_cbs.append(cb)
+	b.pressed.connect(func(): _activate_by(b))
 	return b
+
+# ------------------------------------------------------------------ 输入兜底
+## 统一的按钮触发入口：300ms 去重。
+## 触摸设备上一次点击会走两条路 —— 引擎的鼠标模拟（触发 pressed）
+## 和下面 _input 的矩形兜底 —— 去重保证只生效一次。
+func _activate(key: String) -> void:
+	var now := Time.get_ticks_msec()
+	if now - int(_lock.get(key, 0)) < 300:
+		return
+	_lock[key] = now
+	Sfx.play("click", 2.0)
+	if key == "solo" or key == "multi":
+		_leaving = true
+	var i := KEYS.find(key)
+	if i >= 0 and i < _cbs.size():
+		_cbs[i].call()
+
+func _activate_by(b: Button) -> void:
+	var i := _btns.find(b)
+	if i < 0:
+		return
+	_activate(KEYS[i] if i < KEYS.size() else "gear")
+
+## 兜底：直接在 MainMenu 这一层按矩形命中测试。
+## 万一某个隐藏的全屏遮罩把 GUI 事件吞了，Button.pressed 收不到，
+## 这条路径仍然能保证按钮可用。
+func _input(event: InputEvent) -> void:
+	# 设置面板打开时，点击归面板，主菜单一律不响应
+	if _settings != null and _settings.visible:
+		return
+	if _leaving:
+		return
+	if event is InputEventScreenTouch:
+		if not event.pressed:
+			return
+	elif event is InputEventMouseButton:
+		if event.button_index != MOUSE_BUTTON_LEFT or not event.pressed:
+			return
+	else:
+		return
+	var pos := event.position
+	for i in _btns.size():
+		var b := _btns[i]
+		if b == null or not b.visible:
+			continue
+		if b.get_global_rect().has_point(pos):
+			_activate(KEYS[i] if i < KEYS.size() else "gear")
+			return
+
+## 启动自检：找出可能吞掉点击的全屏控件，打印出来便于排错
+func _audit_overlays() -> void:
+	var vp := get_viewport().get_visible_rect().size
+	print("[MainMenu] 视口 %s，按钮 %d 个" % [vp, _btns.size()])
+	for i in _btns.size():
+		print("  按钮%d 矩形=%s" % [i, _btns[i].get_global_rect()])
+	var found := 0
+	for n in get_tree().root.get_children():
+		found += _scan_blockers(n, "", vp)
+	print("[MainMenu] 可疑全屏拦截控件: %d 个" % found)
+
+## 返回本子树里"全屏且 STOP"的控件数量。
+## 这类控件会吞掉它下面所有控件的点击。
+func _scan_blockers(n: Node, path: String, vp: Vector2) -> int:
+	var p := path + "/" + n.name
+	var found := 0
+	if n is CanvasLayer:
+		var cl := n as CanvasLayer
+		if not cl.visible:
+			print("  [隐藏层] %s (layer=%d) —— CanvasLayer 继承自 Node，"
+					% [p, cl.layer]
+					+ "visible=false 只保证不绘制，其下 STOP 控件仍可能吞事件")
+	if n is Control:
+		var c := n as Control
+		var is_btn := false
+		for b in _btns:
+			if b == c:
+				is_btn = true
+				break
+		if c.mouse_filter == Control.MOUSE_FILTER_STOP and not is_btn \
+				and c.get_global_rect().size.x >= vp.x * 0.6:
+			var vis := "可见" if c.is_visible_in_tree() else "不可见"
+			print("  [拦截?] %s (%s) 矩形=%s" % [p, vis, c.get_global_rect()])
+			found += 1
+	for ch in n.get_children():
+		found += _scan_blockers(ch, p, vp)
+	return found
 
 func _toast(msg: String) -> void:
 	if _toast_lbl == null or not is_instance_valid(_toast_lbl):

@@ -140,8 +140,11 @@ var _curr_pos: Vector3
 
 
 ## 当前设备是否带触摸屏（用于屏蔽鼠标模拟事件）
+## 两个判据取或：DisplayServer 在某些设备/模拟器上可能误报，
+## OS.has_feature("mobile") 在 Android / iOS 上恒为真，作为兜底。
 static func _is_touch_device() -> bool:
-	return DisplayServer.is_touchscreen_available()
+	return DisplayServer.is_touchscreen_available() \
+			or OS.get_name() in ["Android", "iOS"]
 
 func _ready() -> void:
 	add_to_group("entity")
@@ -324,13 +327,13 @@ func is_using_item() -> bool:
 func _unhandled_input(e: InputEvent) -> void:
 	if not alive:
 		return
-	# 触摸设备上忽略鼠标事件。
+	# 触摸设备上忽略鼠标事件 —— 这是「点屏幕任何地方都开火」的真正解法。
 	#
-	# Godot 默认开启 emulate_mouse_from_touch，手指点一下会同时发出
-	# InputEventScreenTouch 和 InputEventMouseButton(左键)。HUD 处理完
-	# 触摸后如果没有把事件标记为已消费，这个鼠标事件就会继续流到这里，
-	# 于是「点屏幕任何地方都变成开火」。
-	# project.godot 里已经把该选项关掉了，这里再加一道保险。
+	# emulate_mouse_from_touch 必须保持开启（否则所有 Button 都点不动，
+	# 详见 project.godot 的注释），于是手指点一下会同时发出
+	# InputEventScreenTouch 和 InputEventMouseButton(左键)。
+	# HUD 已经处理了触摸那一路，这里再把鼠标这一路挡掉，
+	# 就不会出现"点哪都在开枪"。
 	if _is_touch_device() and (e is InputEventMouseButton or e is InputEventMouseMotion):
 		return
 	if e is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:

@@ -58,6 +58,8 @@ var _scope: Control
 var _scope_tex: ImageTexture
 var _damage_layer: Control
 var _root: Control                 # FULL_RECT 根节点，它的 size 就是本层真实坐标系
+var _back_btn: Button              # 退出按钮（Button 只认鼠标事件，触摸需额外兜底）
+var _btn_lock: Dictionary = {}     # 按钮名 -> 上次触发时间戳，防止触摸+鼠标双触发
 var _last_vp := Vector2.ZERO
 
 func _ready() -> void:
@@ -170,8 +172,10 @@ func _build() -> void:
 	# ---- 退出 ----
 	var back := _mk_button("退出", Color(0.35, 0.12, 0.14), 20)
 	_tr(back, 16, 12, 110, 56)
-	back.pressed.connect(func(): back_pressed.emit())
+	# 不直接 emit：走统一入口，方便和触摸兜底共用一个去重锁
+	back.pressed.connect(func(): _press_button("back"))
 	root.add_child(back)
+	_back_btn = back
 
 	# ---- 底部：姿态 / 弹药 / 血条 ----
 	stance_label = Label.new()
@@ -305,10 +309,7 @@ func _build() -> void:
 	_cancel_btn = _mk_button("取消", Color(0.45, 0.18, 0.16), 24)
 	_tc(_cancel_btn, 200, 288, 66)
 	_cancel_btn.visible = false
-	_cancel_btn.pressed.connect(func():
-		Sfx.play("click")
-		if player != null:
-			player.cancel_item())
+	_cancel_btn.pressed.connect(func(): _press_button("cancel"))
 	root.add_child(_cancel_btn)
 
 	# ---- 触摸控件 ----
@@ -483,8 +484,19 @@ func _ensure_layout() -> void:
 	print("[Hud] 摇杆=%s  开火=%s" % [
 			TouchLayout.rect_of("stick", vp), TouchLayout.rect_of("fire", vp)])
 
+## 触摸设备上，鼠标事件是 Godot 模拟出来的（emulate_mouse_from_touch）。
+## 这类事件必须放行给上层的 Button —— 因为 BaseButton 只认
+## InputEventMouseButton，如果在这层被消费掉，游戏里的「退出」「取消」
+## 就点不动了（上一轮主菜单按钮失效也是同一个原因）。
+static func _touch_dev() -> bool:
+	return DisplayServer.is_touchscreen_available() \
+			or OS.get_name() in ["Android", "iOS"]
+
 func _on_touch(e: InputEvent) -> void:
 	if _edit_preview:
+		return
+	# 触摸设备：鼠标事件一律放行，交给真正的 Button 处理，本层不碰
+	if _touch_dev() and (e is InputEventMouseButton or e is InputEventMouseMotion):
 		return
 	var vp := _vp()
 	# 触摸事件坐标是 viewport 坐标系，必须先转到 CanvasLayer 内部坐标系
@@ -492,6 +504,15 @@ func _on_touch(e: InputEvent) -> void:
 	var lp := _to_local(e.position)
 	if e is InputEventScreenTouch:
 		if e.pressed:
+			# 先看看是不是按在 Button 上。
+			# Button 本身只认鼠标事件，而鼠标模拟只跟随第一根手指，
+			# 多指操作时（比如左手摇杆、右手点取消）就点不到了。
+			# 这里在触摸分支补一次矩形检测，保证任意手指都能触发。
+			var btn := _hit_button(lp)
+			if btn != "":
+				_press_button(btn)
+				get_viewport().set_input_as_handled()
+				return
 			_route_down(TouchLayout.hit(vp, lp), e, lp)
 		else:
 			_route_up(e.index)
@@ -532,6 +553,37 @@ func _look_scale() -> float:
 	if sx < 0.001:
 		return 1.0
 	return 1.0 / sx
+
+## lp：已经转换到 CanvasLayer 内部坐标系的触点位置
+## 触摸命中 Button。
+## 用 get_rect()（相对父节点 root，而 root 是 FULL_RECT，
+## 所以它就在 CanvasLayer 内部坐标系里）与 lp 比较 —— 这两者天然同坐标系，
+## 不依赖 follow_viewport 是否生效，比 get_global_rect() 更稳。
+func _hit_button(lp: Vector2) -> String:
+	if _cancel_btn != null and _cancel_btn.visible \
+			and _cancel_btn.get_rect().has_point(lp):
+		return "cancel"
+	if _back_btn != null and _back_btn.visible \
+			and _back_btn.get_rect().has_point(lp):
+		return "back"
+	return ""
+
+## 触发按钮效果。
+##
+## 触摸设备上一次点击会走两条路：本层的触摸兜底 + Godot 的鼠标模拟，
+## 这里用时间戳去重，避免同一次点击触发两次（比如退出生效两次）。
+func _press_button(which: String) -> void:
+	var now := Time.get_ticks_msec()
+	if now - int(_btn_lock.get(which, 0)) < 400:
+		return
+	_btn_lock[which] = now
+	Sfx.play("click", -6.0)
+	match which:
+		"cancel":
+			if player != null:
+				player.cancel_item()
+		"back":
+			back_pressed.emit()
 
 ## lp：已经转换到 CanvasLayer 内部坐标系的触点位置
 func _route_down(k: String, e: InputEvent, lp: Vector2 = Vector2.ZERO) -> void:

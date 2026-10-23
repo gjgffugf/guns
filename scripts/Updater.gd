@@ -27,6 +27,7 @@ var _btn_go: Button
 var _info: Dictionary = {}
 var _busy: bool = false
 var _apk_path: String = ""
+var _dim: ColorRect
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -111,10 +112,15 @@ func _build_ui() -> void:
 	var dim := ColorRect.new()
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	dim.color = Color(0, 0, 0, 0.66)
+	# 同 SettingsPanel：隐藏时必须 IGNORE，否则会吞掉主菜单点击
+	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_dim = dim
 	_layer.add_child(dim)
 
 	var center := CenterContainer.new()
 	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	# 让点击穿过容器落到 dim 上
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_layer.add_child(center)
 
 	_panel = PanelContainer.new()
@@ -136,6 +142,7 @@ func _build_ui() -> void:
 	_panel.set_meta("v", v)
 
 func _show_dialog(d: Dictionary) -> void:
+	_set_visible(true)
 	var v := _panel.get_meta("v") as VBoxContainer
 	for c in v.get_children():
 		c.queue_free()
@@ -223,13 +230,13 @@ func _show_dialog(d: Dictionary) -> void:
 		later.add_theme_stylebox_override("normal", lsb)
 		later.pressed.connect(func():
 			Sfx.play("click")
-			_layer.visible = false)
+			_set_visible(false))
 		row.add_child(later)
 
 	if force:
 		_toast("该版本为强制更新，需更新后继续使用")
 
-	_layer.visible = true
+	_set_visible(true)
 
 # ------------------------------------------------------------------ 下载
 func _start_download() -> void:
@@ -342,6 +349,15 @@ func _try_uri_from_file(jc, godot, real_path: String) -> bool:
 	return true
 
 # ------------------------------------------------------------------ 小提示
+## 统一控制更新弹窗的显隐。
+## 必须同时切换输入过滤：CanvasLayer 继承自 Node，visible=false 只保证不绘制，
+## 不保证阻止输入，所以隐藏时要把全屏暗背景设成 IGNORE。
+func _set_visible(on: bool) -> void:
+	_layer.visible = on
+	if _dim != null:
+		_dim.mouse_filter = Control.MOUSE_FILTER_STOP if on \
+				else Control.MOUSE_FILTER_IGNORE
+
 func _toast(msg: String) -> void:
 	print("[Updater] ", msg)
 	var tl := CanvasLayer.new()
@@ -349,6 +365,8 @@ func _toast(msg: String) -> void:
 	add_child(tl)
 	var c := CenterContainer.new()
 	c.set_anchors_preset(Control.PRESET_FULL_RECT)
+	# toast 只是提示，绝不能拦住底下的按钮（它要显示 2.6 秒）
+	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	tl.add_child(c)
 	var p := PanelContainer.new()
 	var sb := StyleBoxFlat.new()

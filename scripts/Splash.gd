@@ -42,6 +42,7 @@ func _try_video() -> bool:
 		_mode = "video"
 		_vsp = VideoStreamPlayer.new()
 		_vsp.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_vsp.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_vsp.expand = true
 		_vsp.stream = res
 		_vsp.autoplay = true
@@ -62,6 +63,7 @@ func _try_image() -> bool:
 		_mode = "image"
 		_img = TextureRect.new()
 		_img.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_img.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_img.texture = tex
 		_img.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		_img.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
@@ -88,6 +90,7 @@ func _build_skip() -> void:
 	_bar.offset_right = -70.0
 	_bar.offset_top = -76.0
 	_bar.offset_bottom = -64.0
+	_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_bar.max_value = 100
 	_bar.show_percentage = false
 	var f := StyleBoxFlat.new()

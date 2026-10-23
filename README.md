@@ -401,3 +401,106 @@ pointing/emulate_touch_from_mouse=false
   说明没跟随视口
 - 开火键矩形应落在右下方
 
+## 十三、⚠️ 菜单按钮点不动的连锁 bug（不要关 emulate_mouse_from_touch）
+
+**结论：`input_devices/pointing/emulate_mouse_from_touch` 必须保持 true。**
+
+Godot 的 `Button` / `BaseButton` **只认 `InputEventMouseButton`**，
+`InputEventScreenTouch` 不会触发它的 `pressed` 信号。
+手指之所以能点动按钮，全靠这个选项把触摸「翻译」成鼠标事件。
+Godot 官方 PR（#49215）的原话：
+
+> Only InputEventMouseButton events (which are generated from InputEventScreenTouch
+> events when "Emulate Mouse From Touch" is on -- the default) will trigger BaseButton
+> button_down and button_up events; **and nothing when it's off**.
+
+所以为了修「点哪都开火」而关掉它，会直接导致 **菜单里所有按钮失效**。
+
+### 正确解法（两者都要）
+
+1. **保留 `emulate_mouse_from_touch=true`**，让菜单按钮能点
+2. **在 Player 侧挡掉模拟出来的鼠标事件**，这才是「点哪都开火」的根源
+
+```gdscript
+# scripts/Player.gd
+func _unhandled_input(e: InputEvent) -> void:
+	# 触摸设备上，鼠标事件是 Godot 模拟的产物，一律忽略
+	if _is_touch_device() and (e is InputEventMouseButton or e is InputEventMouseMotion):
+		return
+```
+
+配套的两点：
+
+- `Hud._on_touch()` 在触摸设备上对鼠标事件直接 return（**且不消费**），
+  把事件放行给上层的「退出」「取消」等 Button
+- Button 走 `_press_button()` 统一入口，带 400ms 去重。
+  因为一次点击会走「触摸兜底」+「鼠标模拟」两条路，不去重会触发两次
+
+### 附带修掉的
+
+- `MainMenu` 右侧 `VBoxContainer` 没设 `mouse_filter`，默认是 `STOP`，
+  按钮之间的间隙会吞掉触摸。已改 `IGNORE`
+- 「退出」「取消」这类 Button 补了触摸兜底：
+  鼠标模拟只跟随**第一根手指**，多指操作时（左手摇杆、右手点取消）点不到，
+  所以 `Hud._hit_button()` 在触摸分支里再做一次矩形检测
+
+## 十四、⚠️ 菜单按钮点不动（其二）：隐藏的 CanvasLayer 仍在吞点击
+
+这一条和上一节的 `emulate_mouse_from_touch` 是两个独立原因，都要修。
+
+### 根因：CanvasLayer 的 visible=false 只管绘制，不管输入
+
+`CanvasLayer` 继承自 **`Node`**，不是 `CanvasItem`。它的 `visible = false`
+只保证「不绘制」，**不保证**阻止其下控件接收 GUI 输入 —— 因为输入拾取
+判断的是 `CanvasItem.is_visible_in_tree()`，而 CanvasLayer 作为 Node
+并不参与这条链。
+
+项目里三个全屏遮罩层都靠 `CanvasLayer.visible = false` 关闭：
+
+| 层 | layer | 全屏控件 | 默认过滤 |
+|---|---|---|---|
+| SettingsPanel | 60 | 暗背景 `dim` (ColorRect) | **STOP** |
+| Loading | 150 | `_root` (Control) + `bg` (ColorRect) | **STOP** |
+| Updater | 200 | 暗背景 `dim` + `center` | **STOP** |
+
+而 **`ColorRect` / `Panel` / `Container` 的 `mouse_filter` 默认就是 `STOP`**
+（只有 `Label` 默认是 `IGNORE`）。
+
+三者都在主菜单之上，且都是全屏 —— 于是主菜单的所有点击都被它们吃掉。
+
+### 修法：隐藏时显式关掉输入过滤
+
+不能只依赖 `visible`，必须同时切换 `mouse_filter`：
+
+```gdscript
+# SettingsPanel / Updater：打开时才 STOP，关闭时立刻回到 IGNORE
+func _set_visible(on: bool) -> void:
+	_layer.visible = on
+	_dim.mouse_filter = Control.MOUSE_FILTER_STOP if on \
+			else Control.MOUSE_FILTER_IGNORE
+```
+
+`Loading` 永远不需要输入，整层直接 `IGNORE`。
+
+### 兜底：主菜单不依赖引擎的按钮路由
+
+即便还有别的遮罩吃掉 GUI 事件，`MainMenu._input()` 也会按矩形命中测试
+直接触发按钮。之所以可行，是因为 Godot 的事件顺序是
+**`_input()` → `Control._gui_input()` → `_unhandled_input()`**，
+`_input()` 在 GUI 之前执行，不会被遮罩抢先。
+
+两条路（引擎 `pressed` 与 `_input` 兜底）共用 300ms 去重，不会重复触发。
+
+### 启动自检
+
+`MainMenu` 启动时会打印：
+
+```
+[MainMenu] 视口 (1280, 720)，按钮 4 个
+  按钮0 矩形=...
+[隐藏层] /root/Loading (layer=150) —— visible=false ...
+[MainMenu] 可疑全屏拦截控件: N 个
+```
+
+理想情况下 `可疑全屏拦截控件` 应为 **0**。
+

@@ -47,6 +47,7 @@ var _ed_drag: bool = false
 var _ed_off: Vector2 = Vector2.ZERO
 var _ed_grab: Control                 # 画布级事件接收层（坐标系静止）
 var _ed_finger: int = -1              # 正在拖动的手指 index
+var _dim: ColorRect                   # 全屏暗背景（隐藏时必须为 IGNORE）
 var _proxies: Dictionary = {}
 
 
@@ -131,15 +132,24 @@ func _build() -> void:
 	var dim := ColorRect.new()
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	dim.color = Color(0, 0, 0, 0.62)
-	# 必须显式设成 STOP：ColorRect 默认是 IGNORE，
-	# 那样它既收不到 gui_input（点面板外关不掉），
-	# 事件还会穿透到下层 HUD，变成"在设置界面点一下就开枪"。
-	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	# ★ 默认必须是 IGNORE。
+	#   ColorRect 的 mouse_filter 默认就是 STOP（不是 IGNORE）。
+	#   而 CanvasLayer 继承自 Node 而非 CanvasItem —— 它的 visible=false
+	#   只保证不绘制，并不保证阻止其下控件接收输入。
+	#   所以隐藏时若不显式关掉输入过滤，这个全屏暗背景会一直吞掉
+	#   主菜单 / 游戏里的所有点击。
+	#   打开面板时再切成 STOP（用于"点面板外关闭"）。
+	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_dim = dim
 	dim.gui_input.connect(func(e):
-		if e is InputEventScreenTouch and e.pressed:
+		# 触摸设备上 Godot 会同时发出 ScreenTouch 和 MouseButton（鼠标模拟），
+		# 两个都处理会让一次点击触发两次关闭。这里只挑一种来源。
+		var touch_dev := DisplayServer.is_touchscreen_available() \
+				or OS.get_name() in ["Android", "iOS"]
+		if e is InputEventScreenTouch and e.pressed and touch_dev:
 			close()
 		elif e is InputEventMouseButton and e.pressed \
-				and e.button_index == MOUSE_BUTTON_LEFT:
+				and e.button_index == MOUSE_BUTTON_LEFT and not touch_dev:
 			close()
 	)
 	add_child(dim)
@@ -646,6 +656,11 @@ func _rebuild_proxies() -> void:
 		_place_proxy(k)
 
 func _on_canvas_input(e: InputEvent) -> void:
+	# 触摸设备上鼠标事件是模拟产物，会和触摸事件重复驱动拖动，这里忽略
+	if DisplayServer.is_touchscreen_available() \
+			or OS.get_name() in ["Android", "iOS"]:
+		if e is InputEventMouseButton or e is InputEventMouseMotion:
+			return
 	var sz := _ed_canvas.size
 	if sz.x < 2.0 or sz.y < 2.0:
 		return
@@ -828,6 +843,9 @@ func open_panel() -> void:
 	_vol_val.text = "%d%%" % int(GameSettings.master_volume * 100)
 	_sync_cross()
 	visible = true
+	# 面板可见了，暗背景才需要接收"点外部关闭"的点击
+	if _dim != null:
+		_dim.mouse_filter = Control.MOUSE_FILTER_STOP
 	# 面板之前是隐藏的，容器不会给画布算尺寸。
 	# 显示之后等一帧布局完成，再把「自定义控件」页按真实尺寸摆一次。
 	_rebuild_proxies.call_deferred()
@@ -846,6 +864,9 @@ func close() -> void:
 func close_panel() -> void:
 	if not visible:
 		return
+	# 立刻释放输入，不等动画结束 —— 否则这 0.16 秒里仍然吞事件
+	if _dim != null:
+		_dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	GameSettings.save_cfg()
 	var tw := create_tween()
 	tw.set_parallel(true)

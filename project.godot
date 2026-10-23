@@ -146,5 +146,13 @@ gdscript/warnings/return_value_discarded=0
 
 [input_devices]
 
-pointing/emulate_mouse_from_touch=false
+; 必须保持 true（Godot 默认值）。
+; Godot 的 Button / BaseButton 只认 InputEventMouseButton —— 触摸事件
+; InputEventScreenTouch 不会触发它的 pressed 信号。触摸之所以能点按钮，
+; 全靠这个选项把触摸"翻译"成鼠标事件。
+; 一旦关掉，菜单里所有 Button 都会点不动（上一轮为了修"点哪都开火"
+; 关掉它，结果导致主菜单按钮全部失效，属于典型的连锁 bug）。
+; "点哪都开火"的正确解法是在 Player 侧屏蔽触摸设备上的鼠标事件，见
+; scripts/Player.gd 的 _unhandled_input()。
+pointing/emulate_mouse_from_touch=true
 pointing/emulate_touch_from_mouse=false

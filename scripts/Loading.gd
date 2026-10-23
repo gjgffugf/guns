@@ -28,11 +28,16 @@ func _ready() -> void:
 func _build() -> void:
 	_root = Control.new()
 	_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	# ★ 加载层永远不需要接收输入。
+	#   它是 CanvasLayer（继承自 Node），visible=false 只保证不绘制，
+	#   并不能保证阻止输入；默认 STOP 会吞掉后面场景的所有点击。
+	_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_layer.add_child(_root)
 
 	var bg := ColorRect.new()
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	bg.color = Color(0.035, 0.04, 0.055, 1.0)
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.add_child(bg)
 
 	# 背景网格
