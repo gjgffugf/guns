@@ -14,6 +14,7 @@ var _lock: Dictionary = {}          # key -> 上次触发时刻，防止两条�
 var _leaving: bool = false          # 已触发转场，避免连点
 
 func _ready() -> void:
+	print("[MainMenu] _ready 开始")
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	_build_bg()
 	_build_ui()
@@ -24,6 +25,7 @@ func _ready() -> void:
 	# 每次启动比对云端版本，已是最新版则提示一次
 	Updater.check(true)
 	_audit_overlays.call_deferred()
+	print("[MainMenu] _ready 完成，按钮 %d 个" % _btns.size())
 
 func _build_bg() -> void:
 	_bg = Control.new()
@@ -230,15 +232,24 @@ func _input(event: InputEvent) -> void:
 		return
 	if _leaving:
 		return
-	if event is InputEventScreenTouch:
-		if not event.pressed:
+	# ★ 必须用 as 转换后再取属性。
+	#   形参静态类型是 InputEvent，而 position / pressed / button_index
+	#   是子类（ScreenTouch / MouseButton）才有的属性。Godot 的类型窄化
+	#   只在 `if x is Type:` 块内有效，一旦走到块外的合并点就会失效，
+	#   直接写 event.position 会编译失败 —— 整个场景加载不出来。
+	var pos := Vector2.ZERO
+	var t := event as InputEventScreenTouch
+	if t != null:
+		if not t.pressed:
 			return
-	elif event is InputEventMouseButton:
-		if event.button_index != MOUSE_BUTTON_LEFT or not event.pressed:
-			return
+		pos = t.position
 	else:
-		return
-	var pos := event.position
+		var mb := event as InputEventMouseButton
+		if mb == null:
+			return
+		if mb.button_index != MOUSE_BUTTON_LEFT or not mb.pressed:
+			return
+		pos = mb.position
 	for i in _btns.size():
 		var b := _btns[i]
 		if b == null or not b.visible:
@@ -249,6 +260,9 @@ func _input(event: InputEvent) -> void:
 
 ## 启动自检：找出可能吞掉点击的全屏控件，打印出来便于排错
 func _audit_overlays() -> void:
+	# 纯诊断代码，绝不能因为排错逻辑本身出错而影响主流程
+	if not is_instance_valid(self):
+		return
 	var vp := get_viewport().get_visible_rect().size
 	print("[MainMenu] 视口 %s，按钮 %d 个" % [vp, _btns.size()])
 	for i in _btns.size():
@@ -261,7 +275,8 @@ func _audit_overlays() -> void:
 ## 返回本子树里"全屏且 STOP"的控件数量。
 ## 这类控件会吞掉它下面所有控件的点击。
 func _scan_blockers(n: Node, path: String, vp: Vector2) -> int:
-	var p := path + "/" + n.name
+	# n.name 是 StringName，直接和 String 相加在部分版本下会有类型问题
+	var p := path + "/" + str(n.name)
 	var found := 0
 	if n is CanvasLayer:
 		var cl := n as CanvasLayer

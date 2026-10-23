@@ -504,3 +504,73 @@ func _set_visible(on: bool) -> void:
 
 理想情况下 `可疑全屏拦截控件` 应为 **0**。
 
+## 十五、⚠️ 整个界面加载不出来（黑屏）：类型窄化失效导致编译失败
+
+### 根因
+
+函数形参声明为 `InputEvent`，但 `position` / `pressed` / `button_index`
+`index` / `relative` 这些是**子类**（`InputEventScreenTouch`、
+`InputEventMouseButton`…）才有的属性。
+
+Godot 的类型窄化**只在 `if x is Type:` 块内有效**（`and` 短路之后也算）。
+一旦走到块外的合并点就失效，此时访问子类属性会直接编译失败：
+
+```
+ERROR: Cannot find property "position" on base "InputEvent"
+```
+
+**错误写法**（把取属性提到了所有分支合并之后）：
+
+```gdscript
+func _input(event: InputEvent) -> void:
+	if event is InputEventScreenTouch:
+		if not event.pressed: return
+	elif event is InputEventMouseButton:
+		if event.button_index != MOUSE_BUTTON_LEFT: return
+	else:
+		return
+	var pos := event.position      # ✗ 窄化已失效，编译失败
+```
+
+**正确写法**（用 `as` 显式转换）：
+
+```gdscript
+	var pos := Vector2.ZERO
+	var t := event as InputEventScreenTouch
+	if t != null:
+		if not t.pressed:
+			return
+		pos = t.position
+	else:
+		var mb := event as InputEventMouseButton
+		if mb == null:
+			return
+		pos = mb.position
+```
+
+本项目 `Hud` 新增了 `static func _ev_pos(e) -> Vector2` 统一处理这件事。
+
+### 为什么表现为"黑屏"而不是报错弹窗
+
+`Loading.goto()` 里原本直接调 `change_scene_to_packed(scn)`。
+场景脚本编译失败时，Godot 会打印错误并**中止那次调用**，
+于是后面的 `_layer.visible = false` 永远执行不到 ——
+卡在**全屏不透明**的加载层上，看起来就是"界面加载不出来"。
+
+### 已做的加固
+
+1. **场景切换一律用 `call_deferred`**，延后到帧末执行。
+   切换与本协程无关，无论成功与否，收起逻辑都照常执行，
+   出错时至少能看到日志而不是一片黑
+2. **20 秒超时兜底**（`_hide_guard`）：强制收起加载层
+3. `MainMenu._ready` 打印 `[MainMenu] _ready 开始 / 完成`，
+   只看到"开始"没看到"完成"就说明 `_ready` 中途抛错了
+
+### 本机自查
+
+```bash
+python3 tools/check_gd.py
+```
+
+已内置这条规则，会直接指出哪一行的 `var.prop` 越过了窄化边界。
+

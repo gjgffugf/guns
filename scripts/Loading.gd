@@ -140,6 +140,9 @@ func goto(path: String) -> void:
 	_bar.value = 0
 	_pct.text = "0%"
 	_tip.text = TIPS[randi() % TIPS.size()]
+	# 超时保险：万一下面某一步卡住或出错，20 秒后强制收起加载层。
+	# 加载层是全屏不透明的，不收起就是永久黑屏，必须有兜底。
+	_hide_guard()
 
 	ResourceLoader.load_threaded_request(path)
 	var st := ResourceLoader.THREAD_LOAD_IN_PROGRESS
@@ -156,20 +159,43 @@ func goto(path: String) -> void:
 		_pct.text = "%d%%" % int(smooth)
 		await get_tree().process_frame
 
+	var scn: PackedScene = null
 	if st == ResourceLoader.THREAD_LOAD_LOADED:
-		var scn := ResourceLoader.load_threaded_get(path)
+		# load_threaded_get 返回 Resource，需显式转成 PackedScene
+		scn = ResourceLoader.load_threaded_get(path) as PackedScene
 		_bar.value = 100
 		_pct.text = "100%"
 		await get_tree().create_timer(0.12).timeout
-		get_tree().change_scene_to_packed(scn)
+
+	# ★ 关键：场景切换一律用 call_deferred 延后到本帧末执行。
+	#
+	# 直接调用 change_scene_to_packed() 时，如果新场景的脚本有编译错误，
+	# Godot 会打印错误并中止那次调用，本协程后面的
+	# "_layer.visible = false" 就永远执行不到 —— 于是卡在全屏不透明的
+	# 加载层上，看起来就是"界面加载不出来"。
+	# 改成 deferred 之后，切换发生在帧末、与本协程无关，
+	# 无论切换成功与否，下面的收起逻辑都会照常执行，
+	# 出错时至少能看到报错日志而不是一片黑。
+	if scn != null:
+		get_tree().call_deferred("change_scene_to_packed", scn)
 	else:
 		push_error("[Loading] 场景加载失败: %s" % path)
-		get_tree().change_scene_to_file(path)
+		get_tree().call_deferred("change_scene_to_file", path)
 
-	await get_tree().create_timer(0.18).timeout
+	await get_tree().create_timer(0.25).timeout
 	_layer.visible = false
 	set_process(false)
 	_busy = false
+	print("[Loading] 已切换到 %s 并收起加载层" % path)
+
+## 超时兜底：强制收起加载层，避免任何异常导致永久黑屏
+func _hide_guard() -> void:
+	await get_tree().create_timer(20.0).timeout
+	if _layer != null and _layer.visible:
+		push_warning("[Loading] 加载超时，强制收起加载层（请查看上面的报错）")
+		_layer.visible = false
+		set_process(false)
+		_busy = false
 
 func _process(delta: float) -> void:
 	_t += delta

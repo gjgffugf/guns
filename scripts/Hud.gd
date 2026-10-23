@@ -492,6 +492,24 @@ static func _touch_dev() -> bool:
 	return DisplayServer.is_touchscreen_available() \
 			or OS.get_name() in ["Android", "iOS"]
 
+## 安全取事件坐标。
+## 形参是 InputEvent，position 属于子类；在没进 `is` 块之前直接访问
+## 会因类型窄化失效而编译失败，这里统一用 as 转换。
+static func _ev_pos(e: InputEvent) -> Vector2:
+	var t := e as InputEventScreenTouch
+	if t != null:
+		return t.position
+	var d := e as InputEventScreenDrag
+	if d != null:
+		return d.position
+	var mb := e as InputEventMouseButton
+	if mb != null:
+		return mb.position
+	var mm := e as InputEventMouseMotion
+	if mm != null:
+		return mm.position
+	return Vector2.ZERO
+
 func _on_touch(e: InputEvent) -> void:
 	if _edit_preview:
 		return
@@ -500,8 +518,10 @@ func _on_touch(e: InputEvent) -> void:
 		return
 	var vp := _vp()
 	# 触摸事件坐标是 viewport 坐标系，必须先转到 CanvasLayer 内部坐标系
-	# 再去做命中测试，否则永远命中不到，点哪都变成"空白区"
-	var lp := _to_local(e.position)
+	# 再去做命中测试，否则永远命中不到，点哪都变成"空白区"。
+	# 注意：e 的静态类型是 InputEvent，position 是子类才有的属性，
+	# 这里还没进 `if e is ...` 块，窄化不生效，必须用 _ev_pos() 转一下。
+	var lp := _to_local(_ev_pos(e))
 	if e is InputEventScreenTouch:
 		if e.pressed:
 			# 先看看是不是按在 Button 上。
@@ -588,7 +608,8 @@ func _press_button(which: String) -> void:
 ## lp：已经转换到 CanvasLayer 内部坐标系的触点位置
 func _route_down(k: String, e: InputEvent, lp: Vector2 = Vector2.ZERO) -> void:
 	var idx: int = int(e.get("index", 0)) if e is InputEventScreenTouch else 0
-	var pos := lp if lp != Vector2.ZERO else _to_local(e.position)
+	# 同上：e 是 InputEvent，取 position 必须走 _ev_pos()
+	var pos := lp if lp != Vector2.ZERO else _to_local(_ev_pos(e))
 	# 视角登记必须放在 player 判空之前：否则 player 还没绑定时
 	# 整个 _look_idx 都设不上，拖动就完全转不了视角。
 	# 开火键也登记进来，这样「长按开火 + 滑动瞄准」才成立。

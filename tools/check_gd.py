@@ -245,6 +245,83 @@ if os.path.isfile(PG):
             errors.append(f"project.godot:{i} 含 '#' 注释，Godot 的 cfg 只认 ';'")
 
 # ============================================================
+# InputEvent 子类属性：必须在类型窄化块内，或经 as 转换后访问。
+#
+# 形参静态类型是 InputEvent，而 position / pressed / button_index / index
+# / relative 等只有子类才有。Godot 的类型窄化只在 `if x is Type:` 块内
+# （以及 `and` 短路之后）有效；一旦走到块外的合并点就失效，
+# 直接写 event.position 会让整个脚本编译失败 —— 表现就是场景加载不出来。
+# ============================================================
+IE_SUBPROPS = {
+    "position": ("InputEventScreenTouch", "InputEventScreenDrag",
+                 "InputEventMouseButton", "InputEventMouseMotion",
+                 "InputEventMagnifyGesture", "InputEventPanGesture"),
+    "pressed": ("InputEventScreenTouch", "InputEventMouseButton", "InputEventKey",
+                "InputEventJoypadButton"),
+    "index": ("InputEventScreenTouch", "InputEventScreenDrag"),
+    "button_index": ("InputEventMouseButton", "InputEventJoypadButton"),
+    "relative": ("InputEventScreenDrag", "InputEventMouseMotion"),
+    "velocity": ("InputEventScreenDrag", "InputEventMouseMotion"),
+    "echo": ("InputEventKey",),
+    "keycode": ("InputEventKey",),
+    "physical_keycode": ("InputEventKey",),
+    "unicode": ("InputEventKey",),
+    "double_tap": ("InputEventScreenTouch",),
+    "axis": ("InputEventJoypadMotion",),
+    "axis_value": ("InputEventJoypadMotion",),
+}
+
+
+def _check_input_event(path, src):
+    lines = src.split("\n")
+    for i, ln in enumerate(lines):
+        m = re.match(r"\s*(?:static\s+)?func\s+\w+\s*\(\s*(\w+)\s*:\s*InputEvent\b", ln)
+        if not m:
+            continue
+        var = m.group(1)
+        # 记录该函数的缩进层级与当前生效的窄化类型
+        stack = []          # (缩进, 是否处于窄化块)
+        j = i + 1
+        while j < len(lines):
+            cur = lines[j]
+            if cur.strip() == "":
+                j += 1
+                continue
+            indent = len(cur) - len(cur.lstrip("\t"))
+            # 遇到下一个顶层 func 就结束
+            if indent == 0 and re.match(r"func\s", cur):
+                break
+            while stack and stack[-1][0] > indent:
+                stack.pop()
+            narrowed = any(n for _, n in stack)
+            # 检测窄化开始（if / elif 同一行内 and 之后也算）
+            if re.search(r"\b(?:if|elif)\s+" + var + r"\s+is\s+InputEvent\w+", cur) \
+                    or re.search(r"\bmatch\s+" + var, cur):
+                stack.append((indent, True))
+                j += 1
+                continue
+            if stack and stack[-1][0] == indent:
+                stack[-1] = (indent, False)
+            if not narrowed:
+                # 去掉行内注释再检查，避免把注释里的示例当成真代码
+                code_only = cur.split("#")[0] if "#" in cur else cur
+                for pm in re.finditer(r"\b" + var + r"\.(\w+)", code_only):
+                    prop = pm.group(1)
+                    if prop in IE_SUBPROPS:
+                        errors.append(
+                            f"{path}:{j+1} `{var}.{prop}` —— {var} 的静态类型是 InputEvent，"
+                            f"{prop} 只有子类（{'/'.join(IE_SUBPROPS[prop])}) 才有；"
+                            f"这里不在 `if {var} is ...` 块内，类型窄化已失效，"
+                            f"会导致编译失败。请改成 `var t := {var} as XXX` 后再取属性")
+            j += 1
+
+
+for f in sorted(os.listdir(os.path.join(ROOT, "scripts"))):
+    if f.endswith(".gd"):
+        _check_input_event("scripts/" + f,
+                           open(os.path.join(ROOT, "scripts", f), encoding="utf-8").read())
+
+# ============================================================
 # export_presets.cfg 键名校验（键名写错 Godot 会静默用默认值）
 # ============================================================
 PRESET_FILE = os.path.join(ROOT, "export_presets.cfg")
