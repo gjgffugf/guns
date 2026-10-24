@@ -2,8 +2,12 @@
 * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
 html, body {
-  width: 100%; height: 100%;
-  background: #07080c;
+  width: 100%;
+  /* 100dvh：移动端浏览器地址栏收起/展开时高度会变，
+     100vh 会算出比可视区更大的值，导致底部被截或留白。 */
+  height: 100%;
+  height: 100dvh;
+  background: #000;
   overflow: hidden;
   font-family: system-ui, -apple-system, "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
   color: #e8ecf4;
@@ -14,10 +18,24 @@ html, body {
   -webkit-user-select: none;
 }
 
-#app { position: fixed; inset: 0; overflow: hidden; }
+#app {
+  position: fixed;
+  /* inset:0 在部分 WebView 上不含状态栏区域，用 dvh 兜底 */
+  top: 0; left: 0; right: 0; bottom: 0;
+  height: 100%; height: 100dvh;
+  overflow: hidden;
+  background: #000;
+}
 
-/* 3D 画布在最底层 */
-canvas#gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+/* 3D 画布在最底层：铺满整个屏幕，包括刘海/挖孔区域 */
+canvas#gl {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; width: 100vw;
+  height: 100%; height: 100dvh;
+  display: block;
+  background: #000;
+}
 
 /* UI 层：盖在画布上。默认穿透，只有交互元素接收事件 */
 .layer { position: absolute; inset: 0; }
@@ -141,14 +159,18 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 
 /* ---------------- 游戏 HUD ---------------- */
 #hud { pointer-events: none; }
-#hud .stat { position: absolute; left: 14px; top: 12px; font-size: 20px;
+/* 顶部元素避开安全区（刘海 / 挖孔 / 圆角），但画布本身仍然铺满 */
+#hud .stat { position: absolute; top: 12px; font-size: 20px;
+  left: calc(14px + env(safe-area-inset-left, 0px));
   color: #7dff9a; text-shadow: 0 2px 6px #000; font-variant-numeric: tabular-nums; }
 #hud .score { position: absolute; left: 50%; top: 10px; transform: translateX(-50%);
   font-size: 26px; text-shadow: 0 2px 8px #000; }
-#hud .exit { position: absolute; right: 14px; top: 12px; pointer-events: auto;
+#hud .exit { position: absolute; top: 12px; pointer-events: auto;
+  right: calc(14px + env(safe-area-inset-right, 0px));
   padding: 10px 20px; font-size: 18px; border-radius: 12px;
   background: rgba(60,18,22,.9); border: 2px solid rgba(255,255,255,.5); }
-#hud .bottom { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
+#hud .bottom { position: absolute; left: 50%; transform: translateX(-50%);
+  bottom: calc(14px + env(safe-area-inset-bottom, 0px));
   display: flex; flex-direction: column; align-items: center; gap: 6px; }
 #hud .stance { font-size: 17px; color: #b8c6e0; text-shadow: 0 2px 6px #000; }
 #hud .hpwrap { display: flex; align-items: center; gap: 10px; }
@@ -189,3 +211,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 
 /* 准星 */
 #crosshair { position: absolute; inset: 0; pointer-events: none; }
+
+
+/* 触摸控件层铺满，控件坐标与触摸事件同为 CSS 像素 */
+#touch { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }

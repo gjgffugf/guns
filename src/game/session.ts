@@ -10,6 +10,7 @@ import {
   type WeaponState, type WeaponKind,
 } from './weapon';
 import { createBot, stepBot, hurtBot } from './bot';
+import { applyLook } from './aim';
 import { eyePos, dirFrom, pickTarget, hasLineOfSight } from './combat';
 import type { Settings } from '../core/settings';
 import type { V3 } from '../core/vec';
@@ -68,9 +69,12 @@ export class SoloSession {
   private fpsAcc = 0;
   private fps = 60;
 
+  private canvas: HTMLCanvasElement;
+
   constructor(canvas: HTMLCanvasElement, ui: SessionUI, s: Settings) {
     this.ui = ui;
     this.s = s;
+    this.canvas = canvas;
 
     // ★ WebGL 创建必须容错。
     //   设备不支持 / 驱动异常 / 内存不足时，构造函数会直接抛异常；
@@ -123,10 +127,14 @@ export class SoloSession {
   }
 
   private resize(): void {
-    const w = window.innerWidth;
-    const h = window.innerHeight;
+    // ★ 用 canvas 的实际布局尺寸，而不是 window.innerWidth/Height。
+    //   后者在部分 WebView / 带状态栏的机型上会与画布真实区域不一致，
+    //   相机宽高比算错就会在边缘留出空白带。
+    const rect = this.canvas.getBoundingClientRect();
+    const w = Math.max(1, Math.round(rect.width) || window.innerWidth);
+    const h = Math.max(1, Math.round(rect.height) || window.innerHeight);
     if (this.renderer) this.renderer.setSize(w, h, false);
-    this.camera.aspect = w / Math.max(1, h);
+    this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }
 
@@ -161,10 +169,11 @@ export class SoloSession {
     this.ui.setTip(next === 'melee' ? '已切换到刀' : '已切换到步枪');
   }
   look(dx: number, dy: number): void {
-    const sens = this.s.sensitivity * (this.ads ? 0.45 : 1);
-    this.p.yaw -= dx * 0.0032 * sens * 2;
-    this.pitch -= (this.s.invertY ? -dy : dy) * 0.0032 * sens * 2;
-    this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch));
+    // 每像素的转动弧度：0.0032*2 ≈ 0.0064 rad/px
+    const sens = this.s.sensitivity * (this.ads ? 0.45 : 1) * 0.0064;
+    const r = applyLook(this.p.yaw, this.pitch, dx, dy, sens, this.s.invertY);
+    this.p.yaw = r.yaw;
+    this.pitch = r.pitch;
   }
 
   // ---------------- 主循环 ----------------

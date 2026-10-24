@@ -164,7 +164,34 @@ Termux：`pkg install nodejs && node server.js`
 
 ---
 
-## 十、当前版本的已知限制
+## 十、视角方向约定
+
+| 手指动作 | 视角 |
+|---|---|
+| 右滑 | 向右转 |
+| 左滑 | 向左转 |
+| 下滑 | 向下看 |
+| 上滑 | 向上看 |
+
+不喜欢纵向方向可在「设置 → 通用 → 反转纵向」切换。
+
+由 `src/game/aim.ts` 的 `applyLook()` 实现（纯函数），
+`tests/aim.test.ts` 用「朝向向量在右方向上的投影」来断言，
+不是靠肉眼看。
+
+## 十一、全屏 / 无白边 / 隐藏状态栏
+
+三件事分别由三处保证：
+
+| 问题 | 处理位置 |
+|---|---|
+| 画布不铺满、留白边 | `src/style.css`（100dvh + 安全区）、`session.resize()` 用 canvas 实际 `getBoundingClientRect()` |
+| 刘海/挖孔一侧留白 | `tools/setup-android.mjs` 注入 `windowLayoutInDisplayCutoutMode=shortEdges` |
+| 状态栏一直显示 | `tools/setup-android.mjs` 在 styles.xml 加全屏项，并在 `MainActivity` 注入沉浸式代码（含 `onWindowFocusChanged` 重新隐藏） |
+
+HUD 顶部元素用 `env(safe-area-inset-*)` 内缩，画布本身仍然铺满到刘海区。
+
+## 十二、当前版本的已知限制
 
 1. **多人模式客户端未接线** —— 服务器已就绪并测试通过，客户端入口显示"即将开放"
 2. **应用内更新未接线** —— `UPDATE_JSON_URL` 位置已预留，逻辑待补

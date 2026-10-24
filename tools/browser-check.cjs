@@ -187,6 +187,30 @@ const ok = (c, name, extra = '') => {
     const a2 = await page.locator('#hud .ammo').textContent();
     ok(a1 === a2, '松开后停止射击（不会一直打）', `${a1} -> ${a2}`);
 
+    // ---- 12.5) 画布铺满视口（不出现白边）----
+    const cover = await page.evaluate(() => {
+      const c = document.querySelector('canvas#gl');
+      if (!c) return { ok: false, why: 'no-canvas' };
+      const r = c.getBoundingClientRect();
+      return {
+        ok: Math.abs(r.width - window.innerWidth) <= 1
+          && Math.abs(r.height - window.innerHeight) <= 1
+          && r.x <= 0.5 && r.y <= 0.5,
+        w: Math.round(r.width), h: Math.round(r.height),
+        vw: window.innerWidth, vh: window.innerHeight,
+        x: Math.round(r.x), y: Math.round(r.y),
+      };
+    });
+    ok(cover.ok, '画布铺满视口（无白边）',
+      `${cover.w}x${cover.h} vs 视口 ${cover.vw}x${cover.vh} @(${cover.x},${cover.y})`);
+
+    const scroll = await page.evaluate(() => ({
+      sh: document.documentElement.scrollWidth,
+      sw: document.documentElement.clientWidth,
+    }));
+    ok(scroll.sh <= scroll.sw + 1, '页面无横向溢出',
+      `scrollWidth=${scroll.sh} clientWidth=${scroll.sw}`);
+
     // ---- 13) FPS 显示 ----
     const fpsTxt = await page.locator('#hud .stat').textContent();
     ok(/FPS\s*\d+/.test(fpsTxt), '左上角显示 FPS', fpsTxt);

@@ -128,6 +128,18 @@ export class SettingsPanel {
       this.s.masterVolume = v;
       this.commit();
     }, (v) => `${Math.round(v * 100)}%`);
+
+    // 纵向反转（视角上下方向因人而异，给个开关）
+    const inv = el('div', { class: 'row' });
+    inv.append(el('label', { text: '反转纵向' }));
+    const ib = btn(this.s.invertY ? '开' : '关', 'btn', () => {
+      this.s.invertY = !this.s.invertY;
+      this.commit();
+      this.render();
+    });
+    if (this.s.invertY) ib.classList.add('on');
+    inv.append(ib);
+    this.body.append(inv);
   }
 
   private sliderRow(

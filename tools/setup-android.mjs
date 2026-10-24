@@ -2,7 +2,7 @@
  * 调整 Android 工程：横屏锁定、沉浸全屏、硬件加速。
  * 用法：node tools/setup-android.mjs [android目录]
  */
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 const ANDROID = process.argv[2] || 'android';
@@ -71,6 +71,146 @@ if (changed) {
   console.log('AndroidManifest.xml 无需改动');
 }
 
+// ---- 4) 主题：全屏 / 透明状态栏 / 延伸到刘海区 ----
+const STYLES = path.join(ANDROID, 'app', 'src', 'main', 'res', 'values', 'styles.xml');
+if (existsSync(STYLES)) {
+  let st = readFileSync(STYLES, 'utf8');
+  const items = [
+    '        <item name="android:windowFullscreen">true</item>',
+    '        <item name="android:windowTranslucentStatus">true</item>',
+    '        <item name="android:windowTranslucentNavigation">true</item>',
+    '        <item name="android:statusBarColor">@android:color/transparent</item>',
+    '        <item name="android:navigationBarColor">@android:color/transparent</item>',
+    '        <item name="android:windowBackground">@android:color/black</item>',
+    // 让内容延伸到挖孔/刘海区域，否则那一侧会留出一条白边
+    '        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>',
+    '        <item name="android:windowActionBar">false</item>',
+    '        <item name="android:windowNoTitle">true</item>',
+  ];
+  let added = 0;
+  // 逐个 <style> 块补齐（Capacitor 有多个 AppTheme 变体）
+  st = st.replace(/<style([^>]*)>([\s\S]*?)<\/style>/g, (full, attrs, inner) => {
+    let body = inner;
+    let local = 0;
+    for (const it of items) {
+      const name = it.match(/name="([^"]+)"/)[1];
+      if (body.includes(name)) continue;
+      body += `\n${it}`;
+      local++;
+    }
+    added += local;
+    return `<style${attrs}>${body}</style>`;
+  });
+  if (added > 0) {
+    writeFileSync(STYLES, st);
+    console.log(`主题已补齐全屏项（${added} 处）`);
+  } else {
+    console.log('主题已含全屏项，跳过');
+  }
+} else {
+  console.warn('警告：没找到 styles.xml');
+}
+
+// ---- 5) MainActivity：运行时强制沉浸式（兼容新旧 API）----
+const JAVA_DIR = path.join(ANDROID, 'app', 'src', 'main', 'java');
+function findMainActivity(dir) {
+  if (!existsSync(dir)) return null;
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      const f = findMainActivity(p);
+      if (f) return f;
+    } else if (e.name === 'MainActivity.java') return p;
+  }
+  return null;
+}
+const MAIN = findMainActivity(JAVA_DIR);
+if (MAIN) {
+  let j = readFileSync(MAIN, 'utf8');
+  if (!j.includes('BB_FULLSCREEN')) {
+    j = j.replace(
+      /^(import [^;]+;\s*)$/m,
+      '$1\nimport android.os.Build;\nimport android.os.Bundle;\nimport android.view.View;\nimport android.view.WindowManager;',
+    );
+    const inject = `
+    // BB_FULLSCREEN: 强制沉浸式，隐藏状态栏与导航栏
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        try {
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                android.view.WindowInsetsController ic = getWindow().getInsetsController();
+                if (ic != null) {
+                    ic.hide(android.view.WindowInsets.Type.statusBars()
+                          | android.view.WindowInsets.Type.navigationBars());
+                    ic.setSystemBarsBehavior(
+                        android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                }
+            } else {
+                getWindow().getDecorView().setSystemUiVisibility(
+                    View.SYSTEM_UI_FLAG_FULLSCREEN
+                  | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                  | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                  | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                  | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                  | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+            }
+        } catch (Exception ignored) { }
+    }
+`;
+    // 插到类体第一个 { 之后
+    const at = j.indexOf('{', j.indexOf('public class MainActivity'));
+    if (at > 0) j = j.slice(0, at + 1) + inject + j.slice(at + 1);
+    else j = j.replace(/\}\s*$/, inject + '}\n');
+    writeFileSync(MAIN, j);
+    console.log('MainActivity 已注入沉浸式代码');
+  } else {
+    console.log('MainActivity 已含沉浸式代码，跳过');
+  }
+} else {
+  console.warn('警告：没找到 MainActivity.java');
+}
+
+// ---- 6) 再切回前台时重新隐藏（用户划出状态栏后回来）----
+if (MAIN) {
+  let j = readFileSync(MAIN, 'utf8');
+  if (!j.includes('onWindowFocusChanged')) {
+    j = j.replace(
+      /\n\}\s*$/,
+      `
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    android.view.WindowInsetsController ic = getWindow().getInsetsController();
+                    if (ic != null) {
+                        ic.hide(android.view.WindowInsets.Type.statusBars()
+                              | android.view.WindowInsets.Type.navigationBars());
+                    }
+                } else {
+                    getWindow().getDecorView().setSystemUiVisibility(
+                        View.SYSTEM_UI_FLAG_FULLSCREEN
+                      | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                      | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                      | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                      | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                      | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+                }
+            } catch (Exception ignored) { }
+        }
+    }
+}
+`,
+    );
+    writeFileSync(MAIN, j);
+    console.log('MainActivity 已加入焦点变化时重新隐藏');
+  }
+}
+
 // ---- 自检 ----
 const finalM = readFileSync(MANIFEST, 'utf8');
 if (!finalM.includes('sensorLandscape')) {
@@ -81,4 +221,18 @@ if (!finalM.includes('android.permission.INTERNET')) {
   console.error('自检失败：缺少网络权限');
   process.exit(1);
 }
-console.log('自检通过：横屏 + 网络权限 + 硬件加速');
+if (existsSync(STYLES)) {
+  const st = readFileSync(STYLES, 'utf8');
+  if (!st.includes('windowLayoutInDisplayCutoutMode')) {
+    console.error('自检失败：未设置刘海区延伸（会留白边）');
+    process.exit(1);
+  }
+}
+if (MAIN) {
+  const j = readFileSync(MAIN, 'utf8');
+  if (!j.includes('BB_FULLSCREEN')) {
+    console.error('自检失败：MainActivity 未注入沉浸式代码');
+    process.exit(1);
+  }
+}
+console.log('自检通过：横屏 + 全屏沉浸 + 刘海延伸 + 网络权限 + 硬件加速');
