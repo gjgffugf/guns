@@ -2,7 +2,16 @@
  * 用真实浏览器验证：界面能加载、控件可见、点击有反应。
  * 这是 Godot 版本做不到的事 —— 现在可以真跑一遍再交付。
  */
-const { chromium } = require('/usr/local/lib/node_modules/playwright');
+// playwright 优先用项目本地的，其次全局的（沙盒里只有全局）
+function loadPlaywright() {
+  const tries = ['playwright', 'playwright-core', '/usr/local/lib/node_modules/playwright'];
+  for (const t of tries) {
+    try { return require(t); } catch { /* 继续试下一个 */ }
+  }
+  console.error('找不到 playwright，请先安装：npm i -D playwright');
+  process.exit(1);
+}
+const { chromium } = loadPlaywright();
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');

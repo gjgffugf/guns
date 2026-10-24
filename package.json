@@ -7,8 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "node tools/compile.cjs check",
+    "check:yaml": "node tools/check-yaml.cjs",
     "test": "node tools/compile.cjs build && node --test build/tests/",
-    "verify": "npm run typecheck && npm run test && npm run build && npm run verify:server && npm run verify:browser",
+    "verify": "npm run check:yaml && npm run typecheck && npm run test && npm run build && npm run verify:server && npm run verify:browser",
     "sync": "vite build && npx cap sync android",
     "verify:browser": "vite build --minify false --outDir dist-debug && node tools/browser-check.cjs",
     "verify:server": "node server/test.js"

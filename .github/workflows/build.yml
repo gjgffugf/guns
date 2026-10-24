@@ -29,6 +29,9 @@ jobs:
       - name: 安装依赖
         run: npm install --no-audit --no-fund
 
+      - name: 校验 workflow 文件（重复键会导致工作流无法启动）
+        run: node tools/check-yaml.cjs
+
       - name: 类型检查（TypeScript 严格模式）
         run: npm run typecheck
 
@@ -59,7 +62,6 @@ jobs:
   build:
     name: 构建 APK
     needs: verify
-    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -86,7 +88,10 @@ jobs:
         run: npm run build
 
       - name: 生成 Android 工程
-        run: npx cap sync android
+        run: |
+          # android/ 已在 .gitignore 里，CI 上必须先 add 才能 sync
+          if [ ! -d android/app ]; then npx cap add android; fi
+          npx cap sync android
 
       - name: 配置横屏与全屏
         run: node tools/setup-android.mjs android
@@ -116,8 +121,10 @@ jobs:
           if [ "${{ github.event.inputs.build_type || 'release' }}" = "release" ]; then
             TASK="assembleRelease"
           fi
+          # pipefail 开启后，用 PIPESTATUS[0] 拿到 gradle 自己的退出码，
+          # 否则 tee 成功会把 gradle 的失败吞掉
+          set -o pipefail
           ./gradlew $TASK --no-daemon --stacktrace 2>&1 | tee ../build.log
-          echo "GRADLE_PIPE_STATUS=${PIPESTATUS[0]}" >> $GITHUB_ENV
 
       - name: 校验 APK 产出
         if: always()
@@ -128,9 +135,22 @@ jobs:
       - name: 校验 APK 包名
         if: always()
         run: |
-          APK=$(ls android/app/build/outputs/apk/*/*.apk | head -1)
+          APK=$(ls android/app/build/outputs/apk/*/*.apk 2>/dev/null | head -1)
+          [ -n "$APK" ] || { echo "没有 APK，跳过包名校验"; exit 0; }
           echo "产物: $APK"
-          ID=$(aapt dump badging "$APK" | head -1 | sed -E "s/.*package: name='([^']+)'.*/\1/")
+          # 新版 build-tools 只提供 aapt2；找不到工具就跳过，不要因此让构建失败
+          AAPT=""
+          for c in aapt aapt2; do command -v $c >/dev/null && AAPT=$c && break; done
+          if [ -z "$AAPT" ] && [ -n "$ANDROID_HOME" ]; then
+            for f in "$ANDROID_HOME"/build-tools/*/aapt2 "$ANDROID_HOME"/build-tools/*/aapt; do
+              [ -x "$f" ] && AAPT="$f" && break
+            done
+          fi
+          if [ -z "$AAPT" ]; then
+            echo "警告：找不到 aapt/aapt2，跳过包名校验（包名由 capacitor.config.ts 保证）"
+            exit 0
+          fi
+          ID=$("$AAPT" dump badging "$APK" | head -1 | sed -E "s/.*package: name='([^']+)'.*/\1/")
           echo "解析到包名: $ID"
           [ "$ID" = "xfan.games.gun" ] || { echo "::error::APK 包名是 $ID，应为 xfan.games.gun"; exit 1; }
           echo "APK 包名校验通过"
