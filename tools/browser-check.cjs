@@ -192,8 +192,16 @@ const ok = (c, name, extra = '') => {
     ok(offscreen.length === 0, '所有控件都在屏幕内',
       offscreen.length ? JSON.stringify(offscreen) : '');
 
-    const invisible = ctrlInfo.filter((c) => c.display === 'none' || Number(c.opacity) < 0.05);
-    ok(invisible.length === 0, '所有控件可见（非零尺寸、非透明）');
+    // ★ heal 是【纯命中层】，视觉由 HUD 的治疗按钮绘制，所以这里允许它透明。
+    //   它的可见性由后面的"治疗物圆形按钮可见"单独检查。
+    const invisible = ctrlInfo.filter((c) =>
+      c.key !== 'heal' && (c.display === 'none' || Number(c.opacity) < 0.05));
+    ok(invisible.length === 0, '所有控件可见（治疗键为透明命中层，单独检查）',
+      invisible.length ? JSON.stringify(invisible) : '');
+    // 命中层本身必须保留尺寸，否则点不到
+    const healHit = ctrlInfo.find((c) => c.key === 'heal');
+    ok(healHit && healHit.w > 20 && healHit.h > 20 && healHit.pe === 'auto',
+      '治疗键命中层有尺寸且可点击', healHit ? `${healHit.w}x${healHit.h} pe=${healHit.pe}` : '');
 
     // ---- 9) 命中测试：点每个控件中心都应命中它自己 ----
     const hitResults = await page.evaluate(() => {
@@ -431,6 +439,122 @@ const ok = (c, name, extra = '') => {
       ok(afterCancel && afterCancel.using === null && afterCancel.fire === false,
         '★ 取消后恢复开火能力', JSON.stringify(afterCancel));
       void before;
+    }
+
+    // ---- 12.77) 治疗按钮：只能有一个，且贴在"治疗物"控件位置上 ----
+    const healPos = await page.evaluate(() => {
+      const wrap = document.querySelector('.healwrap');
+      const hit = document.querySelector('#touch .ctrl.heal');
+      const arrow = document.querySelector('.heal-arrow');
+      const list = document.querySelector('.heallist');
+      if (!wrap || !hit) return null;
+      const box = (e) => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, cx: r.x + r.width / 2, cy: r.y + r.height / 2 }; };
+      return {
+        wrap: box(wrap),
+        hit: box(hit),
+        arrow: arrow ? box(arrow) : null,
+        list: list ? box(list) : null,
+        // 页面上不应该还有第二个治疗控件
+        wrapCount: document.querySelectorAll('.healwrap').length,
+        hitOpacity: getComputedStyle(hit).opacity,
+        text: wrap.textContent || '',
+        vw: window.innerWidth, vh: window.innerHeight,
+      };
+    });
+    ok(healPos && healPos.wrapCount === 1, '★ 只有一个治疗控件（不再重复两个）',
+      healPos ? `数量 ${healPos.wrapCount}` : '');
+    if (healPos) {
+      const d = Math.hypot(healPos.wrap.cx - healPos.hit.cx, healPos.wrap.cy - healPos.hit.cy);
+      ok(d < 4, '★ 治疗按钮与"治疗物"控件位置重合',
+        `偏差 ${d.toFixed(1)}px @(${healPos.wrap.cx.toFixed(0)}, ${healPos.wrap.cy.toFixed(0)})`);
+      // 不在屏幕正中
+      const offCenter = Math.abs(healPos.wrap.cx - healPos.vw / 2);
+      ok(offCenter > 100, '★ 治疗按钮不在屏幕正中央', `距中心 ${offCenter.toFixed(0)}px`);
+      ok(parseFloat(healPos.hitOpacity) === 0, '★ 底层命中框透明（不出现第二个可见按钮）',
+        `opacity=${healPos.hitOpacity}`);
+    }
+
+    // ---- 12.78) 展开栏在按钮上方 ----
+    await page.locator('.heal-arrow').click();
+    await page.waitForTimeout(250);
+    const stack = await page.evaluate(() => {
+      const wrap = document.querySelector('.healwrap');
+      const arrow = document.querySelector('.heal-arrow');
+      const list = document.querySelector('.heallist');
+      const box = (e) => { const r = e.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, cx: r.x + r.width / 2 }; };
+      return { wrap: box(wrap), arrow: box(arrow), list: box(list) };
+    });
+    ok(stack.arrow.bottom <= stack.wrap.top + 2,
+      '★ 三角箭头在圆形按钮上方', `箭头底 ${stack.arrow.bottom.toFixed(0)} ≤ 按钮顶 ${stack.wrap.top.toFixed(0)}`);
+    ok(stack.list.bottom <= stack.arrow.top + 2,
+      '★ 展开栏在三角箭头上方', `列表底 ${stack.list.bottom.toFixed(0)} ≤ 箭头顶 ${stack.arrow.top.toFixed(0)}`);
+    await page.locator('.heal-arrow').click();
+    await page.waitForTimeout(200);
+
+    // ---- 12.79) 多点触控：摇杆 + 开火 同时进行 ----
+    const fb2 = await page.locator('#touch .ctrl.fire').boundingBox();
+    const sb2 = await page.locator('#touch .ctrl.stick').boundingBox();
+    if (fb2 && sb2) {
+      const cdp3 = await page.context().newCDPSession(page);
+      const before = await page.evaluate(() => {
+        const s = window.__bb?.session;
+        return s ? { ammo: s.debugAmmo, x: s.debugPos.x, z: s.debugPos.z } : null;
+      });
+      // 一次派发两个触点：id=1 按开火，id=2 推摇杆
+      await cdp3.send('Input.dispatchTouchEvent', {
+        type: 'touchStart',
+        touchPoints: [
+          { x: fb2.x + fb2.width / 2, y: fb2.y + fb2.height / 2, id: 1 },
+          { x: sb2.x + sb2.width / 2, y: sb2.y + sb2.height / 2, id: 2 },
+        ],
+      });
+      // 第二根手指往前推摇杆，两根手指同时保持
+      for (let i = 1; i <= 6; i++) {
+        await cdp3.send('Input.dispatchTouchEvent', {
+          type: 'touchMove',
+          touchPoints: [
+            { x: fb2.x + fb2.width / 2, y: fb2.y + fb2.height / 2, id: 1 },
+            { x: sb2.x + sb2.width / 2, y: sb2.y + sb2.height / 2 - i * 10, id: 2 },
+          ],
+        });
+        await page.waitForTimeout(40);
+      }
+      await page.waitForTimeout(300);
+      const during = await page.evaluate(() => {
+        const s = window.__bb?.session;
+        return s ? { ammo: s.debugAmmo, x: s.debugPos.x, z: s.debugPos.z } : null;
+      });
+      await cdp3.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+
+      if (before && during) {
+        const shot = before.ammo - during.ammo;
+        const moved = Math.hypot(during.x - before.x, during.z - before.z);
+        ok(shot > 0, '★ 多点触控：一指开火生效', `弹药 ${before.ammo} -> ${during.ammo}`);
+        ok(moved > 0.3, '★ 多点触控：另一指推摇杆同时移动',
+          `位移 ${moved.toFixed(2)}m  弹药 ${before.ammo} -> ${during.ammo}`);
+      }
+    }
+
+    // ---- 12.80) 多点触控：开火 + 跳跃 ----
+    if (fb2) {
+      const jumpBox = await page.locator('#touch .ctrl.jump').boundingBox();
+      if (jumpBox) {
+        const cdp4 = await page.context().newCDPSession(page);
+        const a0 = await page.evaluate(() => window.__bb?.session?.debugAmmo ?? null);
+        await cdp4.send('Input.dispatchTouchEvent', {
+          type: 'touchStart',
+          touchPoints: [
+            { x: fb2.x + fb2.width / 2, y: fb2.y + fb2.height / 2, id: 3 },
+            { x: jumpBox.x + jumpBox.width / 2, y: jumpBox.y + jumpBox.height / 2, id: 4 },
+          ],
+        });
+        await page.waitForTimeout(400);
+        const air = await page.evaluate(() => window.__bb?.session?.debugAirborne ?? null);
+        const a1 = await page.evaluate(() => window.__bb?.session?.debugAmmo ?? null);
+        await cdp4.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        ok(a0 !== null && a1 !== null && a1 < a0, '★ 多点触控：开火与跳跃互不打断',
+          `弹药 ${a0} -> ${a1}，起跳=${air}`);
+      }
     }
 
     // ---- 12.8) 玩家走不出地图边界 ----

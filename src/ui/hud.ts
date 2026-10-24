@@ -1,4 +1,5 @@
 import { el, btn, show, clear } from './dom';
+import { rectOf, type ControlCfg } from '../core/layout';
 import type { Settings } from '../core/settings';
 
 /** 战斗 HUD（DOM）。左上角实时 FPS，底部血条与弹药。 */
@@ -81,7 +82,9 @@ export class Hud {
     this.flash = el('div', { class: 'hurt-flash' });
     this.muzzle = el('div', { class: 'muzzle' });
 
-    // ---- 治疗物：下方圆形 + 上方三角展开 ----
+    // ---- 治疗物：圆形按钮 + 上方三角展开 ----
+    // ★ 位置由 layout.ts 的 heal 控件配置决定（与"治疗物"控件同一套坐标），
+    //   不再固定在屏幕正中 —— 否则会和左下角的"治疗物"按钮重复成两个。
     this.healWrap = el('div', { class: 'healwrap' });
     this.healArrow = el('button', {
       class: 'heal-arrow', type: 'button', text: '▲',
@@ -166,6 +169,21 @@ export class Hud {
   }
 
   // ---------------- 治疗物 ----------------
+  /** 按控件配置摆放（与触摸命中层用同一个 rectOf，位置必然一致） */
+  layoutHeal(cfg: ControlCfg): void {
+    const r = rectOf('heal', cfg, window.innerWidth, window.innerHeight);
+    const w = this.healWrap;
+    w.style.left = `${r.x}px`;
+    w.style.top = `${r.y}px`;
+    w.style.width = `${r.w}px`;
+    w.style.height = `${r.h}px`;
+    this.healMain.style.width = `${r.w}px`;
+    this.healMain.style.height = `${r.h}px`;
+    // 字号跟着按钮大小走，避免放大后文字溢出或太小
+    const fs = Math.max(9, Math.round(r.w * 0.155));
+    this.healMain.style.fontSize = `${fs}px`;
+  }
+
   setHealListOpen(on: boolean): void { show(this.healList, on); }
 
   /** 物品列表：名称 + 数量 + 选中态 */
@@ -193,6 +211,15 @@ export class Hud {
   setHealMain(name: string, count: number): void {
     this.healCount.textContent = count > 0 ? `${name}\nx${count}` : `${name}\n用完`;
     this.healMain.classList.toggle('empty', count <= 0);
+  }
+
+  /** 使用中的倒计时（画在圆形按钮上，不占屏幕中央） */
+  setHealUsing(seconds: number): void {
+    this.healMain.classList.toggle('using', seconds > 0);
+    if (seconds > 0) {
+      this.healMain.style.setProperty('--p', String(1 - seconds / 7));
+      this.healCount.textContent = `${seconds.toFixed(1)}s`;
+    }
   }
 
   /** 准星：与设置页共用同一套参数 */

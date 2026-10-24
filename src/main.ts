@@ -76,7 +76,11 @@ let controls: TouchControls | null = null;
 function applySettings(): void {
   sfx.setVolume(settings.masterVolume);
   if (controls) controls.setConfig(settings.controls);
-  if (hud) hud.drawCrosshair(settings);
+  if (hud) {
+    hud.drawCrosshair(settings);
+    // 治疗按钮跟着 heal 控件的配置走（在设置里拖过就一起动）
+    hud.layoutHeal(settings.controls.heal);
+  }
   if (session) session.look(0, 0);
 }
 
@@ -147,6 +151,7 @@ async function startSolo(): Promise<void> {
   show(canvas, true);
   hud.open();
   hud.drawCrosshair(settings);
+  hud.layoutHeal(settings.controls.heal);
   session.start();
   bindControls();
   syncHeal(session.healState);
@@ -243,6 +248,12 @@ for (const ev of ['pointerdown', 'touchstart', 'mousedown'] as const) {
 // 从后台切回时也要恢复（部分 WebView 会挂起 AudioContext）
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) sfx.unlock();
+});
+
+// 屏幕尺寸变化（转屏 / 分屏）后重摆所有控件
+window.addEventListener('resize', () => {
+  controls?.relayoutPublic();
+  if (hud) hud.layoutHeal(settings.controls.heal);
 });
 
 // 阻止系统手势干扰

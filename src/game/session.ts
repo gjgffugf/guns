@@ -181,6 +181,8 @@ export class SoloSession {
   /** 调试/测试用：当前朝向 */
   get debugYaw(): number { return this.p.yaw; }
   get debugHp(): number { return this.p.hp; }
+  get debugAmmo(): number { return this.weapon.ammo; }
+  get debugAirborne(): boolean { return !this.p.grounded; }
   /** 使用治疗物期间不能开枪 */
   get debugCannotFire(): boolean { return isBusy(this.heal); }
   /** 仅测试用：直接设置血量 */

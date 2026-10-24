@@ -80,6 +80,17 @@ export class TouchControls {
       //   并发出 pointercancel，拖动/摇杆会中途断掉。
       n.style.touchAction = 'none';
 
+      // ★ heal 只保留【命中层】，视觉由 HUD 的治疗组件绘制。
+      //   两边都画的话屏幕上会出现两个治疗按钮（"治疗物" + 圆形绷带）。
+      if (k === 'heal') {
+        n.style.background = 'transparent';
+        n.style.border = 'none';
+        n.style.opacity = '0';
+        this.nodes.set(k, n);
+        this.root.append(n);
+        continue;
+      }
+
       if (k === 'stick') {
         // 摇杆做成真实图形：外圈底座 + 会跟着手指跑的摇杆头
         const base = el('div', { class: 'stick-base' });
@@ -113,6 +124,9 @@ export class TouchControls {
     this.relayout();
   }
 
+  /** 对外重摆（转屏时用） */
+  relayoutPublic(): void { this.relayout(); }
+
   /** 重新摆放所有控件（位置 / 尺寸 / 透明度） */
   relayout(): void {
     const { w, h } = { w: window.innerWidth, h: window.innerHeight };
@@ -122,6 +136,15 @@ export class TouchControls {
       // 配置缺失时（存档损坏 / 旧版本残留）退回默认，不要崩
       const cfg = this.cfg?.[k] ?? defaultControls()[k];
       if (!cfg) continue;
+      if (k === 'heal') {
+        // 仍然按配置摆放，只是保持透明
+        const rh = rectOf(k, cfg, w, h);
+        n.style.left = `${rh.x}px`;
+        n.style.top = `${rh.y}px`;
+        n.style.width = `${rh.w}px`;
+        n.style.height = `${rh.h}px`;
+        continue;
+      }
       const r = rectOf(k, cfg, w, h);
       n.style.left = `${r.x}px`;
       n.style.top = `${r.y}px`;
