@@ -574,3 +574,72 @@ python3 tools/check_gd.py
 
 已内置这条规则，会直接指出哪一行的 `var.prop` 越过了窄化边界。
 
+## 十六、⚠️ 游戏内控件不显示 + 点击无反应：坐标系原点被忽略
+
+### 根因
+
+`CanvasLayer` 的内容处在**它自己的局部坐标系**，而触摸事件的
+`position` 处在**视口坐标系**。两者之间由
+`get_final_transform()`（局部 → 视口）关联。
+
+之前的代码只取了「尺寸」而忽略了「原点与缩放」：
+
+```gdscript
+var vp := _root.size          # 恒等于视口尺寸（因为 root 锚定视口）
+...
+TouchLayout.apply(c, k, vp)   # 把控件摆在 0..1560 x 0..720（局部）
+var lp := inv * e.position    # 命中测试却除以了缩放
+```
+
+一旦变换不是单位矩阵（高 DPI 手机 + stretch 时几乎必然如此），
+控件就被按比例放大并推出屏幕：
+
+| 变换缩放 | 开火键在屏幕上的位置 | 是否可见 |
+|---|---|---|
+| 1.0 | (1458, 650) | 可见（唯一的幸运情况） |
+| 1.5 | (2186, 975) | **超出屏幕** |
+| 2.0 | (2915, 1300) | **超出屏幕** |
+| 3.25 | (4737, 2113) | **超出屏幕** |
+
+同时点击位置也永远对不上 —— 于是"看不见控件"+"点了没反应"同时出现。
+
+### 修法：布局与命中测试共用同一套坐标
+
+```gdscript
+func _vp_origin() -> Vector2:
+	return _xf_inv() * Vector2.ZERO
+
+func _vp_size() -> Vector2:
+	var vr := get_viewport().get_visible_rect().size
+	var inv := _xf_inv()
+	return (inv * vr) - (inv * Vector2.ZERO)
+```
+
+布局用 `origin + 比例 * size`，命中测试用 `inv * event.position`，
+**两者天然同源**。数值验证（缩放 1.0 / 1.5 / 2.0 / 3.25，含平移）：
+开火键恒在屏幕 93% / 90%，命中测试全部通过。
+
+### 配套改动：输入改走 `_input()`
+
+Godot 的 GUI 拾取会把事件交给「最上层且 `mouse_filter != IGNORE`」的控件。
+而 **CanvasLayer 继承自 Node，它的 `visible=false` 并不会让子控件变成
+`is_visible_in_tree()==false`**（`CanvasItem::is_visible_in_tree()` 只沿
+CanvasItem 祖先向上查找，会跳过 CanvasLayer），所以隐藏层里的控件
+仍在参与拾取。
+
+`_input()` 在 GUI 拾取**之前**执行，自己按矩形命中测试，完全绕开这套机制。
+HUD 现在统一走 `_input()`，行为确定可控。
+
+同时给 `Loading` / `Updater` / `SettingsPanel` 补了"可见性根"：
+隐藏时把子树的根 Control 设为 `visible=false`，让它真正退出拾取。
+
+### 排错日志
+
+```
+[Hud] 局部尺寸=... 原点=...  视口=...  变换缩放=...
+[Hud] 摇杆=...  开火=...
+```
+
+开火键矩形应落在屏幕右下角；若 `变换缩放` 不是 1，说明 CanvasLayer
+确实带缩放（此时旧代码必然出错，新代码仍然正确）。
+

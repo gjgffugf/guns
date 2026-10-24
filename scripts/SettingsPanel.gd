@@ -140,6 +140,7 @@ func _build() -> void:
 	#   主菜单 / 游戏里的所有点击。
 	#   打开面板时再切成 STOP（用于"点面板外关闭"）。
 	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	dim.visible = false
 	_dim = dim
 	dim.gui_input.connect(func(e):
 		# 触摸设备上 Godot 会同时发出 ScreenTouch 和 MouseButton（鼠标模拟），
@@ -154,6 +155,8 @@ func _build() -> void:
 	)
 	add_child(dim)
 
+	# 同 Updater：CanvasLayer.visible=false 不会传给子控件，
+	# 这里多包一层可见性根，隐藏时才能真正退出输入拾取
 	var center := CenterContainer.new()
 	center.set_anchors_preset(Control.PRESET_FULL_RECT)
 	# 让事件穿过容器落到 dim 上；面板本身及其按钮仍是 STOP，
@@ -843,8 +846,11 @@ func open_panel() -> void:
 	_vol_val.text = "%d%%" % int(GameSettings.master_volume * 100)
 	_sync_cross()
 	visible = true
+	if _panel != null:
+		_panel.visible = true
 	# 面板可见了，暗背景才需要接收"点外部关闭"的点击
 	if _dim != null:
+		_dim.visible = true
 		_dim.mouse_filter = Control.MOUSE_FILTER_STOP
 	# 面板之前是隐藏的，容器不会给画布算尺寸。
 	# 显示之后等一帧布局完成，再把「自定义控件」页按真实尺寸摆一次。
@@ -867,12 +873,16 @@ func close_panel() -> void:
 	# 立刻释放输入，不等动画结束 —— 否则这 0.16 秒里仍然吞事件
 	if _dim != null:
 		_dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_dim.visible = false
 	GameSettings.save_cfg()
 	var tw := create_tween()
 	tw.set_parallel(true)
 	tw.tween_property(_panel, "scale", Vector2(0.92, 0.92), 0.16)
 	tw.tween_property(_panel, "modulate:a", 0.0, 0.16)
-	tw.tween_callback(func(): visible = false)
+	tw.tween_callback(func():
+		visible = false
+		if _panel != null:
+			_panel.visible = false)
 
 func _set_fps(f: int) -> void:
 	GameSettings.apply_fps(f)

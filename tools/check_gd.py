@@ -245,6 +245,33 @@ if os.path.isfile(PG):
             errors.append(f"project.godot:{i} 含 '#' 注释，Godot 的 cfg 只认 ';'")
 
 # ============================================================
+# connect() / Callable 指向本脚本内不存在的方法
+# 删掉函数却忘了删 connect，会直接编译失败
+# ============================================================
+def _check_connect(path, src):
+    methods = set(re.findall(r"^(?:static\s+)?func\s+(\w+)", src, re.M))
+    # 局部变量 / 形参也常作为 Callable 传给 connect，不能算错误
+    locals_ = set(re.findall(r"(?:^|\s|\()var\s+(\w+)", src))
+    for m in re.finditer(r"func\s+\w+\s*\(([^)]*)\)", src):
+        for a in m.group(1).split(","):
+            a = a.strip().split(":")[0].strip()
+            if a.isidentifier():
+                locals_.add(a)
+    for i, ln in enumerate(src.split("\n"), 1):
+        code = ln.split("#")[0]
+        for m in re.finditer(r"\.connect\(\s*([A-Za-z_]\w*)\s*\)", code):
+            name = m.group(1)
+            if name in methods or name in locals_:
+                continue
+            errors.append(f"{path}:{i} connect({name}) 指向不存在的方法 "
+                          f"—— 函数已被删除但连接没删，会编译失败")
+
+for f in sorted(os.listdir(os.path.join(ROOT, "scripts"))):
+    if f.endswith(".gd"):
+        _check_connect("scripts/" + f,
+                       open(os.path.join(ROOT, "scripts", f), encoding="utf-8").read())
+
+# ============================================================
 # InputEvent 子类属性：必须在类型窄化块内，或经 as 转换后访问。
 #
 # 形参静态类型是 InputEvent，而 position / pressed / button_index / index

@@ -37,9 +37,10 @@ const DEFAULT_POS := {
 static func ui_scale(vp: Vector2) -> float:
 	return minf(vp.x / BASE.x, vp.y / BASE.y)
 
-static func center_of(key: String, vp: Vector2) -> Vector2:
+## origin：本层坐标系原点（CanvasLayer 变换不为单位矩阵时不为 0）
+static func center_of(key: String, vp: Vector2, origin: Vector2 = Vector2.ZERO) -> Vector2:
 	var c := GameSettings.get_ctrl(key)
-	return Vector2(float(c["x"]) * vp.x, float(c["y"]) * vp.y)
+	return origin + Vector2(float(c["x"]) * vp.x, float(c["y"]) * vp.y)
 
 static func size_of(key: String, vp: Vector2) -> Vector2:
 	var base: Vector2 = BASE_SIZE.get(key, Vector2(96, 96))
@@ -56,27 +57,28 @@ static func alpha_of(key: String) -> float:
 	return float(c["a"])
 
 ## 把控件摆到存档的位置 / 大小 / 透明度
-static func apply(node: Control, key: String, vp: Vector2) -> void:
+static func apply(node: Control, key: String, vp: Vector2,
+		origin: Vector2 = Vector2.ZERO) -> void:
 	var s := size_of(key, vp)
-	var c := center_of(key, vp)
+	var c := center_of(key, vp, origin)
 	node.size = s
 	node.position = c - s / 2.0
 	node.modulate.a = alpha_of(key)
 	node.pivot_offset = s / 2.0
 
-static func rect_of(key: String, vp: Vector2) -> Rect2:
+static func rect_of(key: String, vp: Vector2, origin: Vector2 = Vector2.ZERO) -> Rect2:
 	var s := size_of(key, vp)
-	var c := center_of(key, vp)
+	var c := center_of(key, vp, origin)
 	return Rect2(c - s / 2.0, s)
 
 ## 命中测试：返回控件名，没有则返回 ""
 ## 命中测试：返回控件名，没有则返回 ""
 ## 尺寸无效的控件直接跳过 —— 否则零尺寸矩形可能把点击吞掉或误判
-static func hit(vp: Vector2, point: Vector2) -> String:
+static func hit(vp: Vector2, point: Vector2, origin: Vector2 = Vector2.ZERO) -> String:
 	if vp.x < 2.0 or vp.y < 2.0:
 		return ""
 	for k in GameSettings.CONTROL_KEYS:
-		var r := rect_of(k, vp)
+		var r := rect_of(k, vp, origin)
 		if r.size.x < 4.0 or r.size.y < 4.0:
 			continue
 		if r.has_point(point):

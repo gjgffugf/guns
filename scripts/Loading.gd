@@ -74,6 +74,11 @@ func _build() -> void:
 	_bar.offset_right = 230.0
 	_bar.offset_top = 0.0
 	_bar.offset_bottom = 12.0
+	# 加载层永远不需要输入，全部 IGNORE。
+	# 注意：只设 CanvasLayer.visible=false 是不够的 ——
+	# CanvasLayer 继承自 Node，CanvasItem::is_visible_in_tree() 只沿
+	# CanvasItem 祖先查找，会跳过它，于是子控件仍在参与输入拾取。
+	_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_bar.max_value = 100
 	_bar.show_percentage = false
 	var fs := StyleBoxFlat.new()
@@ -136,6 +141,7 @@ func goto(path: String) -> void:
 		return
 	_busy = true
 	_layer.visible = true
+	_root.visible = true
 	set_process(true)
 	_bar.value = 0
 	_pct.text = "0%"
@@ -184,6 +190,7 @@ func goto(path: String) -> void:
 
 	await get_tree().create_timer(0.25).timeout
 	_layer.visible = false
+	_root.visible = false
 	set_process(false)
 	_busy = false
 	print("[Loading] 已切换到 %s 并收起加载层" % path)
@@ -194,6 +201,7 @@ func _hide_guard() -> void:
 	if _layer != null and _layer.visible:
 		push_warning("[Loading] 加载超时，强制收起加载层（请查看上面的报错）")
 		_layer.visible = false
+		_root.visible = false
 		set_process(false)
 		_busy = false
 

@@ -318,8 +318,9 @@ func _build() -> void:
 	_build_heal(root)
 	_touch = Control.new()
 	_touch.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_touch.mouse_filter = Control.MOUSE_FILTER_STOP
-	_touch.gui_input.connect(_on_touch)
+	# 输入已统一走 Hud._input()，这一层不再参与 GUI 拾取，
+	# 因此既不设 STOP 也不连 gui_input
+	_touch.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(_touch)
 	root.move_child(_touch, 0)
 	relayout()
@@ -405,10 +406,12 @@ func _build_heal(root: Control) -> void:
 
 ## 把存档里的位置 / 大小 / 透明度应用到所有触摸控件
 func relayout() -> void:
-	var vp := _vp()
+	var vp := _vp_size()
+	var o := _vp_origin()
 	for k in _btns:
 		var c := _btns[k] as Control
-		TouchLayout.apply(c, k, vp)
+		# 必须带上原点：控件坐标和触摸坐标都在这套局部坐标系里
+		TouchLayout.apply(c, k, vp, o)
 	_stick_base = _stick_area.size / 2.0
 	# 治疗物：圆形在下、三角箭头在上
 	var hr := TouchLayout.size_of("heal", vp)
@@ -447,24 +450,42 @@ func _has_prop(name: String) -> bool:
 ## 有了这一步，无论 follow_viewport 是否生效、stretch 怎么配，
 ## 命中测试都能对得上。
 func _to_local(p: Vector2) -> Vector2:
-	var xf := get_final_transform()
-	if xf == null:
-		return p
-	return xf.affine_inverse() * p
+	return _xf_inv() * p
 
-func _vp() -> Vector2:
-	# 优先级：根节点实际尺寸 > 视口逻辑尺寸 > 窗口物理尺寸 > 设计分辨率。
-	# CanvasLayer 跟随视口后，前两者应当一致；后面几级只是防止极端情况
-	# 拿到 0 导致控件尺寸为 0 而"消失"。
-	if _root != null and _root.size.x > 1.0 and _root.size.y > 1.0:
-		return _root.size
+## ★ 本层的坐标系（最关键的两个函数）★
+##
+## 触摸事件的 position 在【视口坐标系】；而控件摆在【CanvasLayer 局部坐标系】。
+## get_final_transform() 正是「CanvasLayer 局部 -> 视口」的变换，
+## 取逆即可把视口矩形换算回局部矩形：
+##
+##     origin = inv * (0,0)
+##     size   = inv * (视口宽高) - origin
+##
+## 布局与命中测试【都必须用这两个值】，这样无论
+## follow_viewport_enabled 是开是关、stretch 怎么配、屏幕几倍 DPI，
+## 两者都天然一致 —— 之前只用一个 _vp() 而不管原点，
+## 在变换非单位矩阵时控件会被整体推出屏幕外，表现就是"看不见控件"。
+func _xf_inv() -> Transform2D:
+	var xf := get_final_transform()
+	return xf.affine_inverse()
+
+func _vp_origin() -> Vector2:
+	return _xf_inv() * Vector2.ZERO
+
+func _vp_size() -> Vector2:
 	var vr := get_viewport().get_visible_rect().size
-	if vr.x > 1.0 and vr.y > 1.0:
-		return vr
-	var w := DisplayServer.window_get_size()
-	if w.x > 1.0 and w.y > 1.0:
-		return Vector2(w)
-	return Vector2(1280.0, 720.0)
+	if vr.x < 2.0 or vr.y < 2.0:
+		vr = Vector2(1280.0, 720.0)
+	var inv := _xf_inv()
+	return (inv * vr) - (inv * Vector2.ZERO)
+
+## 兼容旧调用：返回局部尺寸（不含原点偏移）
+func _vp() -> Vector2:
+	return _vp_size()
+
+## 屏幕中心（局部坐标系）
+func _vp_center() -> Vector2:
+	return _vp_origin() + _vp_size() / 2.0
 
 ## 尺寸变了就重新摆一次；每帧检测，成本可以忽略
 func _ensure_layout() -> void:
@@ -479,10 +500,12 @@ func _ensure_layout() -> void:
 	# 如果还出现"控件不显示 / 点哪都开火"，看这几行就能定位：
 	#   - vp 应该接近 1280x720（逻辑分辨率），若变成 2340x1080 之类说明没跟随视口
 	#   - 开火键矩形应落在 vp 右下角
-	print("[Hud] vp=%s  viewport=%s  变换缩放=%s" % [
-			vp, get_viewport().get_visible_rect().size, get_final_transform().get_scale()])
+	var o := _vp_origin()
+	print("[Hud] 局部尺寸=%s 原点=%s  视口=%s  变换缩放=%s" % [
+			vp, o, get_viewport().get_visible_rect().size,
+			get_final_transform().get_scale()])
 	print("[Hud] 摇杆=%s  开火=%s" % [
-			TouchLayout.rect_of("stick", vp), TouchLayout.rect_of("fire", vp)])
+			TouchLayout.rect_of("stick", vp, o), TouchLayout.rect_of("fire", vp, o)])
 
 ## 触摸设备上，鼠标事件是 Godot 模拟出来的（emulate_mouse_from_touch）。
 ## 这类事件必须放行给上层的 Button —— 因为 BaseButton 只认
@@ -510,81 +533,105 @@ static func _ev_pos(e: InputEvent) -> Vector2:
 		return mm.position
 	return Vector2.ZERO
 
-func _on_touch(e: InputEvent) -> void:
+## ★ 输入统一走 _input()，不再依赖 Control 的 gui_input 拾取 ★
+##
+## 原因：Godot 的 GUI 拾取会把事件交给"最上层且 mouse_filter != IGNORE"的
+## 控件。项目里有多个隐藏的全屏层（Loading/Updater/转场），而
+## **CanvasLayer 继承自 Node，它的 visible=false 并不会让子控件变成
+## is_visible_in_tree()==false**（CanvasItem::is_visible_in_tree 只沿
+## CanvasItem 祖先向上查找，会跳过 CanvasLayer）。
+## 于是那些层里的控件仍在参与拾取，可能把游戏内的触摸全部吃掉。
+##
+## _input() 在 GUI 拾取【之前】执行，自己按矩形命中测试，
+## 完全绕开这套机制，行为确定、可控。
+func _input(event: InputEvent) -> void:
 	if _edit_preview:
 		return
-	# 触摸设备：鼠标事件一律放行，交给真正的 Button 处理，本层不碰
-	if _touch_dev() and (e is InputEventMouseButton or e is InputEventMouseMotion):
-		return
-	var vp := _vp()
-	# 触摸事件坐标是 viewport 坐标系，必须先转到 CanvasLayer 内部坐标系
-	# 再去做命中测试，否则永远命中不到，点哪都变成"空白区"。
-	# 注意：e 的静态类型是 InputEvent，position 是子类才有的属性，
-	# 这里还没进 `if e is ...` 块，窄化不生效，必须用 _ev_pos() 转一下。
-	var lp := _to_local(_ev_pos(e))
-	if e is InputEventScreenTouch:
-		if e.pressed:
-			# 先看看是不是按在 Button 上。
-			# Button 本身只认鼠标事件，而鼠标模拟只跟随第一根手指，
-			# 多指操作时（比如左手摇杆、右手点取消）就点不到了。
-			# 这里在触摸分支补一次矩形检测，保证任意手指都能触发。
-			var btn := _hit_button(lp)
-			if btn != "":
-				_press_button(btn)
-				get_viewport().set_input_as_handled()
-				return
-			_route_down(TouchLayout.hit(vp, lp), e, lp)
+	var t := event as InputEventScreenTouch
+	if t != null:
+		if t.pressed:
+			_on_down(_to_local(t.position), t.index)
 		else:
-			_route_up(e.index)
-		# 消费掉，别再往 _unhandled_input 传，否则会被当成鼠标左键再次触发开火
+			_route_up(t.index)
+		# 触摸事件一律消费，避免模拟出的鼠标事件再触发一次开火
 		get_viewport().set_input_as_handled()
-	elif e is InputEventScreenDrag:
-		if e.index == _stick_idx:
-			_update_stick(lp)
-		elif e.index == _fire_idx:
-			pass    # 长按后滑动仍然持续开火，不中断
-		elif e.index == _look_idx:
-			if player != null:
-				# 旋转量不受平移影响，但缩放要还原，否则高 DPI 下转视角过快/过慢
-				var sc := _look_scale()
-				player.add_look(e.relative * 0.0055 * GameSettings.sensitivity * sc)
+		return
+	var d := event as InputEventScreenDrag
+	if d != null:
+		_on_drag(_to_local(d.position), d.relative, d.index)
 		get_viewport().set_input_as_handled()
-	elif e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
-		# 桌面调试用（project.godot 里已关掉触摸模拟鼠标）
-		if e.pressed:
-			_route_down(TouchLayout.hit(vp, lp), e, lp)
+		return
+	# ---- 以下为鼠标（桌面调试）----
+	if _touch_dev():
+		# 触摸设备上鼠标事件是模拟产物：
+		# 放行给引擎，让「退出」「取消」等 Button.pressed 正常触发
+		return
+	var mb := event as InputEventMouseButton
+	if mb != null and mb.button_index == MOUSE_BUTTON_LEFT:
+		if mb.pressed:
+			# 命中控件才消费；否则交给 Player（PC 鼠标开火 / 瞄准）
+			if _on_down(_to_local(mb.position), 0):
+				get_viewport().set_input_as_handled()
 		else:
 			_route_up(0)
-		get_viewport().set_input_as_handled()
-	elif e is InputEventMouseMotion:
-		if _stick_idx == 0:
-			_update_stick(lp)
-		elif _look_idx == 0:
-			if player != null:
-				player.add_look(e.relative * 0.0055 * GameSettings.sensitivity * _look_scale())
+		return
+	var mm := event as InputEventMouseMotion
+	if mm != null:
+		_on_drag(_to_local(mm.position), mm.relative, 0)
+		return
 
-## 拖拽增量是 viewport 坐标，而 CanvasLayer 跟随视口后缩放已统一，
-## 这里只在极端情况下做一次归一化，避免高 DPI 屏转视角手感突变
+## 按下。返回 true 表示被 HUD 消费。
+func _on_down(local: Vector2, idx: int) -> bool:
+	var btn := _hit_button(local)
+	if btn != "":
+		_press_button(btn)
+		return true
+	var vp := _vp_size()
+	var o := _vp_origin()
+	var k := TouchLayout.hit(vp, local, o)
+	if k == "":
+		# 空白区：登记为转视角手指（必须放在 player 判空之前，
+		# 否则 player 还没绑定时拖动完全转不了视角）
+		_look_idx = idx
+		return false
+	_route_down(k, local, idx)
+	return true
+
+func _on_drag(local: Vector2, relative: Vector2, idx: int) -> void:
+	if idx == _stick_idx:
+		_update_stick(local)
+		return
+	if idx == _fire_idx:
+		return          # 长按后滑动仍持续开火，不中断
+	if idx == _look_idx and player != null:
+		player.add_look(relative * 0.0055 * GameSettings.sensitivity * _look_scale())
+		return
+	# 鼠标（idx==0）在没按下时也走这里：保持摇杆跟手
+	if idx == 0 and _stick_idx == 0:
+		_update_stick(local)
+
+## 拖拽增量是视口坐标，而本层可能有缩放，这里还原成局部增量
 func _look_scale() -> float:
-	var xf := get_final_transform()
-	if xf == null:
+	var sx := absf(_xf_inv().get_scale().x)
+	if sx < 0.0001:
 		return 1.0
-	var sx := absf(xf.get_scale().x)
-	if sx < 0.001:
-		return 1.0
-	return 1.0 / sx
+	return sx
 
-## lp：已经转换到 CanvasLayer 内部坐标系的触点位置
 ## 触摸命中 Button。
 ## 用 get_rect()（相对父节点 root，而 root 是 FULL_RECT，
 ## 所以它就在 CanvasLayer 内部坐标系里）与 lp 比较 —— 这两者天然同坐标系，
 ## 不依赖 follow_viewport 是否生效，比 get_global_rect() 更稳。
 func _hit_button(lp: Vector2) -> String:
+	# 控件挂在 root 下，get_rect() 是相对 root 的；
+	# 加上 root 自身的偏移才是 CanvasLayer 局部坐标，与 lp 同坐标系
+	var base := Vector2.ZERO
+	if _root != null:
+		base = _root.position
 	if _cancel_btn != null and _cancel_btn.visible \
-			and _cancel_btn.get_rect().has_point(lp):
+			and Rect2(base + _cancel_btn.position, _cancel_btn.size).has_point(lp):
 		return "cancel"
 	if _back_btn != null and _back_btn.visible \
-			and _back_btn.get_rect().has_point(lp):
+			and Rect2(base + _back_btn.position, _back_btn.size).has_point(lp):
 		return "back"
 	return ""
 
@@ -605,15 +652,11 @@ func _press_button(which: String) -> void:
 		"back":
 			back_pressed.emit()
 
-## lp：已经转换到 CanvasLayer 内部坐标系的触点位置
-func _route_down(k: String, e: InputEvent, lp: Vector2 = Vector2.ZERO) -> void:
-	var idx: int = int(e.get("index", 0)) if e is InputEventScreenTouch else 0
-	# 同上：e 是 InputEvent，取 position 必须走 _ev_pos()
-	var pos := lp if lp != Vector2.ZERO else _to_local(_ev_pos(e))
-	# 视角登记必须放在 player 判空之前：否则 player 还没绑定时
-	# 整个 _look_idx 都设不上，拖动就完全转不了视角。
-	# 开火键也登记进来，这样「长按开火 + 滑动瞄准」才成立。
-	if k == "" or k == "fire":
+## local：CanvasLayer 局部坐标系下的触点位置
+func _route_down(k: String, local: Vector2, idx: int) -> void:
+	var pos := local
+	# 开火键也登记为转视角手指，这样「长按开火 + 滑动瞄准」才成立
+	if k == "fire":
 		_look_idx = idx
 	if player == null:
 		return
@@ -690,11 +733,13 @@ func _toggle_heal_list() -> void:
 	_heal_list.visible = _heal_open
 	if _heal_open:
 		_rebuild_heal_list()
-		var vp := _vp()
+		var vp := _vp_size()
+		var o := _vp_origin()
 		_heal_list.size = _heal_list.get_combined_minimum_size()
 		_heal_list.position = Vector2(
-				clampf(_heal_root.position.x + _heal_root.size.x * 0.5 - 150, 8, vp.x - 308),
-				maxf(_heal_root.position.y - _heal_list.size.y - 6, 8))
+				clampf(_heal_root.position.x + _heal_root.size.x * 0.5 - 150,
+						o.x + 8, o.x + vp.x - 308),
+				maxf(_heal_root.position.y - _heal_list.size.y - 6, o.y + 8))
 
 func _rebuild_heal_list() -> void:
 	for c in _heal_list.get_children():
@@ -930,7 +975,7 @@ func _draw_stick() -> void:
 func _draw_crosshair() -> void:
 	if player != null and player.ads and player.weapon == Player.Weapon.RANGED:
 		return  # 开镜时由倍镜自己画准星
-	var c := _vp() / 2.0
+	var c := _vp_center()
 	var s := GameSettings.cross_size
 	var gap := GameSettings.cross_gap * s + _spread_px
 	var ln := GameSettings.cross_length * s
@@ -998,7 +1043,7 @@ func _draw_scope() -> void:
 func _draw_hitmark() -> void:
 	if _hit_t <= 0.0:
 		return
-	var c := _vp() / 2.0
+	var c := _vp_center()
 	var a := lerpf(0.0, 1.0, _hit_t / 0.22) * 0.6 + 0.4
 	var col := Color(1.0, 0.25, 0.2, a) if _hit_lethal else Color(1, 1, 1, a)
 	var r := 12.0

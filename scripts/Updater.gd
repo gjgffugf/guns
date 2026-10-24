@@ -28,6 +28,7 @@ var _info: Dictionary = {}
 var _busy: bool = false
 var _apk_path: String = ""
 var _dim: ColorRect
+var _ui_root: Control                 # 可见性根：CanvasLayer.visible 不会传给子控件
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -109,19 +110,30 @@ func _build_ui() -> void:
 	_layer.visible = false
 	add_child(_layer)
 
+	# ★ 多包一层 Control 并切换它的 visible。
+	#   CanvasLayer 继承自 Node，它的 visible=false 不会传给子控件，
+	#   CanvasItem::is_visible_in_tree() 会跳过 CanvasLayer 继续向上找，
+	#   于是这些控件仍在参与输入拾取，可能吞掉游戏内的触摸。
+	#   显式把子树的根设为不可见，才能真正退出拾取。
+	_ui_root = Control.new()
+	_ui_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_ui_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ui_root.visible = false
+	_layer.add_child(_ui_root)
+
 	var dim := ColorRect.new()
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	dim.color = Color(0, 0, 0, 0.66)
 	# 同 SettingsPanel：隐藏时必须 IGNORE，否则会吞掉主菜单点击
 	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_dim = dim
-	_layer.add_child(dim)
+	_ui_root.add_child(dim)
 
 	var center := CenterContainer.new()
 	center.set_anchors_preset(Control.PRESET_FULL_RECT)
 	# 让点击穿过容器落到 dim 上
 	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_layer.add_child(center)
+	_ui_root.add_child(center)
 
 	_panel = PanelContainer.new()
 	_panel.custom_minimum_size = Vector2(620, 0)
@@ -354,6 +366,8 @@ func _try_uri_from_file(jc, godot, real_path: String) -> bool:
 ## 不保证阻止输入，所以隐藏时要把全屏暗背景设成 IGNORE。
 func _set_visible(on: bool) -> void:
 	_layer.visible = on
+	if _ui_root != null:
+		_ui_root.visible = on
 	if _dim != null:
 		_dim.mouse_filter = Control.MOUSE_FILTER_STOP if on \
 				else Control.MOUSE_FILTER_IGNORE
