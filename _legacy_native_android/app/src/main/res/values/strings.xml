@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">破绷战场</string>
-    <string name="mode_solo">单人模式</string>
-    <string name="mode_multi">多人模式</string>
-    <string name="mode_room">开房间</string>
-    <string name="settings">设置</string>
-</resources>

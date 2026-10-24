@@ -1,0 +1,29 @@
+{
+  "name": "breakbind-battlefield",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "node tools/compile.cjs check",
+    "test": "node tools/compile.cjs build && node --test build/tests/",
+    "verify": "npm run typecheck && npm run test && npm run build && npm run verify:server && npm run verify:browser",
+    "sync": "vite build && npx cap sync android",
+    "verify:browser": "vite build --minify false --outDir dist-debug && node tools/browser-check.cjs",
+    "verify:server": "node server/test.js"
+  },
+  "dependencies": {
+    "three": "^0.169.0",
+    "@capacitor/core": "^6.1.2",
+    "@capacitor/app": "^6.0.2"
+  },
+  "devDependencies": {
+    "@types/three": "^0.169.0",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10",
+    "vitest": "^2.1.4",
+    "@capacitor/cli": "^6.1.2",
+    "@capacitor/android": "^6.1.2"
+  }
+}

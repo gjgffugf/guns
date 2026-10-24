@@ -1,0 +1,222 @@
+import './style.css';
+import { el, show } from './ui/dom';
+import { buildSplash } from './ui/splash';
+import { LoadingScreen } from './ui/loading';
+import { MainMenu } from './ui/menu';
+import { SettingsPanel } from './ui/settings';
+import { Hud } from './ui/hud';
+import { TouchControls, type CtrlEvent, type LookEvent } from './input/controls';
+import { SoloSession } from './game/session';
+import { load, save, defaultSettings, type Settings } from './core/settings';
+import type { ControlKey } from './core/layout';
+
+/**
+ * 应用入口：开屏 -> 真实加载 -> 主菜单 -> 游戏。
+ *
+ * ★ 界面切换一律用 display:none（show()），
+ *   DOM 里 display:none 的元素确实不参与事件命中，
+ *   不会出现"隐藏界面吞掉点击"的问题。
+ */
+
+const app = document.getElementById('app') as HTMLElement;
+let settings: Settings = load();
+
+const canvas = el('canvas', { id: 'gl' }) as HTMLCanvasElement;
+app.append(canvas);
+
+/**
+ * 粗略探测屏幕刷新率。
+ *
+ * ★ 必须声明在 settingsPanel 之前：
+ *   SettingsPanel 构造时会立刻调用 refreshHz() 来显示"当前屏幕刷新率"，
+ *   而 `let hzCache` 存在暂时性死区（TDZ）—— 声明在后面就会在构造时抛
+ *   "Cannot access 'hzCache' before initialization"，整个界面起不来。
+ *   这类错误 TypeScript 检查不出来，只有真跑一遍才会暴露。
+ */
+let hzCache = 0;
+function detectRefreshHz(): number {
+  if (hzCache > 0) return hzCache;
+  const samples: number[] = [];
+  let last = performance.now();
+  let n = 0;
+  const step = (now: number): void => {
+    samples.push(now - last);
+    last = now;
+    if (++n < 30) requestAnimationFrame(step);
+    else {
+      samples.sort((a, b) => a - b);
+      const mid = samples[Math.floor(samples.length / 2)];
+      hzCache = mid > 0 ? 1000 / mid : 60;
+    }
+  };
+  requestAnimationFrame(step);
+  return hzCache > 0 ? hzCache : 60;
+}
+
+const loading = new LoadingScreen(app);
+const menu = new MainMenu(app, {
+  onSolo: () => startSolo(),
+  onMulti: () => menu.toast('多人模式将在后续版本开放'),
+  onRoom: () => menu.toast('开房间功能暂未开放'),
+  onSettings: () => settingsPanel.open(),
+}, settings);
+
+const settingsPanel = new SettingsPanel(app, settings, {
+  onChange: (s) => { settings = s; save(s); applySettings(); },
+  onClose: () => settingsPanel.close(),
+  refreshHz: () => detectRefreshHz(),
+});
+
+let hud: Hud | null = null;
+let session: SoloSession | null = null;
+let controls: TouchControls | null = null;
+
+function applySettings(): void {
+  if (controls) controls.setConfig(settings.controls);
+  if (hud) hud.drawCrosshair(settings);
+  if (session) session.look(0, 0);
+}
+
+// ---------------- 开屏 -> 加载 -> 菜单 ----------------
+async function boot(): Promise<void> {
+  const splash = buildSplash(app);
+  await splash.done;
+
+  loading.open();
+  // 真实加载：动态载入游戏模块 + 预热
+  for (let i = 1; i <= 5; i++) {
+    await new Promise((r) => setTimeout(r, 90));
+    loading.setProgress(i / 5 * 0.6);
+  }
+  const { SoloSession: SS } = await import('./game/session');
+  loading.setProgress(0.85);
+  void SS;
+  await new Promise((r) => setTimeout(r, 120));
+  loading.setProgress(1);
+  await new Promise((r) => setTimeout(r, 150));
+  loading.close();
+
+  menu.open();
+}
+
+// ---------------- 单人游戏 ----------------
+async function startSolo(): Promise<void> {
+  menu.close();
+  loading.open();
+  loading.setProgress(0.3);
+
+  if (!hud) {
+    hud = new Hud(app, {
+      onExit: () => exitGame(),
+    }, settings);
+  }
+  loading.setProgress(0.6);
+
+  try {
+  session = new SoloSession(canvas, {
+    setFps: (f) => hud?.setFps(f),
+    setScore: (t) => hud?.setScore(t),
+    setStance: (t) => hud?.setStance(t),
+    setHp: (a, b) => hud?.setHp(a, b),
+    setAmmo: (a, r, m) => hud?.setAmmo(a, r, m),
+    setTip: (t) => hud?.setTip(t),
+    setNotice: (t) => hud?.setNotice(t),
+    setCenter: (t) => hud?.setCenter(t),
+    pushKill: (m) => hud?.pushKill(m),
+    setAds: (on) => hud?.setAds(on),
+  }, settings);
+
+  loading.setProgress(1);
+  await new Promise((r) => setTimeout(r, 120));
+  loading.close();
+
+  show(canvas, true);
+  hud.open();
+  hud.drawCrosshair(settings);
+  session.start();
+  bindControls();
+  } catch (err) {
+    // 任何一步出错都必须收起加载层并回到菜单，
+    // 否则会卡在全屏不透明的加载页上，表现为"界面加载不出来"。
+    console.error('[startSolo] 进入游戏失败', err);
+    loading.close();
+    hud?.close();
+    if (session) { try { session.stop(); } catch { /* 忽略 */ } session = null; }
+    show(canvas, false);
+    menu.open();
+    menu.toast('进入游戏失败，已返回主菜单');
+  }
+}
+
+function bindControls(): void {
+  if (controls) controls.destroy();
+  controls = new TouchControls(
+    app,
+    settings.controls,
+    (e: CtrlEvent) => onCtrl(e),
+    (e: LookEvent) => onLook(e),
+  );
+}
+
+function onCtrl(e: CtrlEvent): void {
+  if (!session) return;
+  const k: ControlKey = e.key;
+  if (k === 'stick') {
+    // nx/ny 是相对控件中心的归一化偏移
+    const len = Math.hypot(e.nx, e.ny);
+    const cl = Math.min(1, len);
+    const nx = len > 0 ? (e.nx / len) * cl : 0;
+    const ny = len > 0 ? (e.ny / len) * cl : 0;
+    if (e.phase === 'up') session.setStick(0, 0);
+    else session.setStick(nx, ny);
+    return;
+  }
+  // ★ 开火键的抬起必须在 phase 判断之前处理。
+  //   原来写成 `if (e.phase !== 'down') return;` 会让 'up' 永远走不到，
+  //   结果是按下开火后停不下来 —— 一直打到弹匣空。
+  if (k === 'fire') {
+    session.setFire(e.phase !== 'up');
+    return;
+  }
+  if (e.phase !== 'down') return;
+  switch (k) {
+    case 'ads': session.toggleAds(); break;
+    case 'jump': session.setJump(true); break;
+    case 'crouch': session.setStance('crouch'); break;
+    case 'prone': session.setStance('prone'); break;
+    case 'reload': session.reload(); break;
+    case 'melee': session.toggleWeapon(); break;
+    case 'heal': session.setFire(false); break;
+    default: break;
+  }
+}
+
+function onLook(e: LookEvent): void {
+  if (!session) return;
+  if (e.phase === 'move') session.look(e.dx, e.dy);
+}
+
+function exitGame(): void {
+  if (session) { session.stop(); session = null; }
+  if (controls) { controls.destroy(); controls = null; }
+  if (hud) hud.close();
+  show(canvas, false);
+  menu.open();
+}
+
+// 阻止系统手势干扰
+document.addEventListener('gesturestart', (e) => e.preventDefault());
+document.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// 保存设置
+window.addEventListener('pagehide', () => save(settings));
+
+boot().catch((err) => {
+  console.error('[boot] 启动失败', err);
+  loading.close();
+  menu.open();
+  menu.toast('启动异常，已返回主菜单');
+});
+
+// 便于调试
+void defaultSettings;

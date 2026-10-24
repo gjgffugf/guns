@@ -1,347 +1,159 @@
-name: 构建 Android APK
+name: 构建 APK
 
 on:
   push:
-    branches: [ main, master ]
-    tags: [ 'v*' ]
+    branches: [main, master]
+    tags: ['v*']
   pull_request:
-    branches: [ main, master ]
+    branches: [main, master]
   workflow_dispatch:
     inputs:
       build_type:
         description: 构建类型
         type: choice
         default: release
-        options: [ release, debug ]
-      upload_log:
-        description: 总是上传完整导出日志（排错用）
-        type: boolean
-        default: true
-
-env:
-  GODOT_VERSION: "4.3"
-  GODOT_STATUS: "stable"
-  ANDROID_HOME: /usr/local/lib/android/sdk
-  GRADLE_OPTS: "-Xmx3g -XX:MaxMetaspaceSize=768m -Dorg.gradle.daemon=false"
+        options: [release, debug]
 
 jobs:
-  build-android:
-    name: 导出 APK (arm64-v8a)
+  verify:
+    name: 类型检查 + 单元测试
     runs-on: ubuntu-latest
-    timeout-minutes: 90
-
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 安装 JDK 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-node@v4
         with:
-          distribution: temurin
+          node-version: '20'
+          cache: 'npm'
+
+      - name: 安装依赖
+        run: npm install --no-audit --no-fund
+
+      - name: 类型检查（TypeScript 严格模式）
+        run: npm run typecheck
+
+      - name: 单元测试
+        run: npm run test
+
+  browser:
+    name: 浏览器端验证（界面 & 控件）
+    runs-on: ubuntu-latest
+    needs: verify
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: 安装依赖
+        run: npm install --no-audit --no-fund
+      - name: 安装 playwright（只用它的驱动，浏览器用系统 Chrome）
+        run: npm i -D playwright@1.47.2 --no-audit --no-fund
+      - name: 构建（不压缩，便于定位报错）
+        run: npx vite build --minify false --outDir dist-debug
+      - name: 真实浏览器验证
+        env:
+          BB_DIST: ${{ github.workspace }}/dist-debug
+        run: node tools/browser-check.cjs
+
+  build:
+    name: 构建 APK
+    needs: verify
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
           java-version: '17'
 
-      - name: 安装 Android SDK 组件
-        run: |
-          set -euo pipefail
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          SM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          [ -x "$SM" ] || SM="$(command -v sdkmanager || true)"
-          [ -n "$SM" ] || { echo "::error::找不到 sdkmanager"; exit 1; }
-          yes | "$SM" --licenses > /dev/null 2>&1 || true
-          "$SM" --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
-          # 校验，避免 --install 静默失败
-          test -d "$ANDROID_HOME/platforms/android-34" || { echo "::error::android-34 未安装"; exit 1; }
-          test -d "$ANDROID_HOME/build-tools/34.0.0" || { echo "::error::build-tools 34.0.0 未安装"; exit 1; }
+      - name: 安装 Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
 
-      - name: 安装 Godot ${{ env.GODOT_VERSION }} headless
-        run: |
-          set -euo pipefail
-          cd /tmp
-          curl -fSL --retry 3 -o godot.zip \
-            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_STATUS}/Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64.zip"
-          unzip -q -o godot.zip
-          sudo install -m 755 "Godot_v${GODOT_VERSION}-${GODOT_STATUS}_linux.x86_64" /usr/local/bin/godot
-          godot --version
+      - name: 安装依赖
+        run: npm install --no-audit --no-fund
 
-      - name: 安装导出模板
-        run: |
-          set -euo pipefail
-          cd /tmp
-          curl -fSL --retry 3 -o templates.tpz \
-            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_STATUS}/Godot_v${GODOT_VERSION}-${GODOT_STATUS}_export_templates.tpz"
-          mkdir -p "${HOME}/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_STATUS}"
-          unzip -q -o templates.tpz
-          mv templates/* "${HOME}/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_STATUS}/"
-          # 必须校验模板真的落到位，否则 gradle 导出会静默失败
-          ls "${HOME}/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_STATUS}/"
-          test -f "${HOME}/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_STATUS}/android_source.zip" \
-            || { echo "::error::android_source.zip 缺失，导出模板不完整"; exit 1; }
+      - name: 构建 Web 资源
+        run: npm run build
 
-      - name: 安装 Android 构建模板到项目（gradle 工程）
-        run: |
-          set -euo pipefail
-          TDIR="${HOME}/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_STATUS}"
-          SRC="$TDIR/android_source.zip"
-          test -f "$SRC" || { echo "::error::找不到 $SRC"; ls -l "$TDIR"; exit 1; }
+      - name: 生成 Android 工程
+        run: npx cap sync android
 
-          # Godot 4 的 Android 导出走 gradle，必须先把构建模板装到 res://android/build/
-          rm -rf android/build
-          mkdir -p android/build
-          unzip -q -o "$SRC" -d android/build/
-          # 告诉 Godot 这个目录是构建产物，不要当资源导入
-          touch android/build/.gdignore
-          # 记录模板版本，Godot 用它判断模板是否匹配
-          echo "${GODOT_VERSION}.${GODOT_STATUS}" > android/.build_version
+      - name: 配置横屏与全屏
+        run: node tools/setup-android.mjs android
 
-          # 校验关键文件
-          for f in android/build/build.gradle android/build/settings.gradle; do
-            test -f "$f" || { echo "::error::$f 未生成，模板解压异常"; ls -la android/build/ | head -30; exit 1; }
-          done
-          echo "构建模板已安装:"
-          ls android/build/
-
-      - name: 生成签名密钥（100 年有效期）
+      - name: 生成并注入签名密钥
         env:
-          KS_STORE_PASS: xfangames          # 库密码
-          KS_ALIAS: xfan                    # 库名 / 别名
-          KS_KEY_PASS: games2287681747      # 密钥密码
-          KS_VALIDITY: "36500"              # 36500 天 ≈ 100 年
+          BB_KS_STOREPASS: ${{ secrets.BB_KS_STOREPASS || 'xfangames' }}
+          BB_KS_ALIAS: ${{ secrets.BB_KS_ALIAS || 'xfan' }}
+          BB_KS_KEYPASS: ${{ secrets.BB_KS_KEYPASS || 'games2287681747' }}
+          BB_KS_VALIDITY: '36500'
+        run: node tools/setup-signing.mjs android
+
+      - name: 校验包名
         run: |
-          set -euo pipefail
-          KS="${HOME}/breakbind.keystore"
-          rm -f "$KS"
+          grep -q 'applicationId "xfan.games.gun"' android/app/build.gradle \
+            || grep -q "applicationId = \"xfan.games.gun\"" android/app/build.gradle \
+            || { echo "::error::包名不是 xfan.games.gun"; exit 1; }
+          echo "包名校验通过: xfan.games.gun"
 
-          if [ "$KS_STORE_PASS" = "$KS_KEY_PASS" ]; then
-            keytool -genkeypair -v -keystore "$KS" -alias "$KS_ALIAS" \
-              -storepass "$KS_STORE_PASS" -keypass "$KS_KEY_PASS" \
-              -keyalg RSA -keysize 2048 -validity "$KS_VALIDITY" \
-              -dname "CN=xfan,OU=xfan.games,O=xfan Games,L=GZ,ST=GD,C=CN"
-            EFFECTIVE="$KS_STORE_PASS"
-          else
-            # Godot 的 Android 导出只有「一个」密码字段，会同时用作
-            # --ks-pass 和 --key-pass，所以两个口令必须一致。
-            # 这里先按你给的两个口令建成 JKS，再把密钥口令对齐到库口令。
-            keytool -genkeypair -v -storetype JKS -keystore "$KS" \
-              -alias "$KS_ALIAS" \
-              -storepass "$KS_STORE_PASS" -keypass "$KS_KEY_PASS" \
-              -keyalg RSA -keysize 2048 -validity "$KS_VALIDITY" \
-              -dname "CN=xfan,OU=xfan.games,O=xfan Games,L=GZ,ST=GD,C=CN"
-            keytool -keypasswd -keystore "$KS" -alias "$KS_ALIAS" \
-              -storepass "$KS_STORE_PASS" -keypass "$KS_KEY_PASS" \
-              -new "$KS_STORE_PASS"
-            EFFECTIVE="$KS_STORE_PASS"
-          fi
+      - name: 赋权 gradlew
+        run: chmod +x android/gradlew
 
-          # 立刻校验，口令不对就当场失败
-          keytool -list -v -keystore "$KS" -alias "$KS_ALIAS" -storepass "$EFFECTIVE" \
-            | grep -q "Alias name: $KS_ALIAS"
-          echo "KEYSTORE_PATH=$KS" >> "$GITHUB_ENV"
-          echo "KEYSTORE_PASS=$EFFECTIVE" >> "$GITHUB_ENV"
-          echo "KEYSTORE_ALIAS=$KS_ALIAS" >> "$GITHUB_ENV"
-          echo "keystore 就绪: $KS (alias=$KS_ALIAS)"
-      - name: 写入编辑器配置（SDK / JDK / 签名）
+      - name: 构建
+        working-directory: android
         run: |
-          set -euo pipefail
-          mkdir -p "${HOME}/.config/godot"
-          cat > "${HOME}/.config/godot/editor_settings-${GODOT_VERSION}.tres" <<EOF
-          [gd_resource type="EditorSettings" format=3]
+          TASK="assembleDebug"
+          if [ "${{ github.event.inputs.build_type || 'release' }}" = "release" ]; then
+            TASK="assembleRelease"
+          fi
+          ./gradlew $TASK --no-daemon --stacktrace 2>&1 | tee ../build.log
+          echo "GRADLE_PIPE_STATUS=${PIPESTATUS[0]}" >> $GITHUB_ENV
 
-          [resource]
-
-          export/android/android_sdk_path = "${ANDROID_HOME}"
-          export/android/java_sdk_path = "${JAVA_HOME}"
-          export/android/debug_keystore = "${HOME}/breakbind.keystore"
-          export/android/debug_keystore_user = "${KEYSTORE_ALIAS}"
-          export/android/debug_keystore_pass = "${KEYSTORE_PASS}"
-          export/android/shutdown_adb_on_exit = false
-          EOF
-          sed -i 's/^          //' "${HOME}/.config/godot/editor_settings-${GODOT_VERSION}.tres"
-          cat "${HOME}/.config/godot/editor_settings-${GODOT_VERSION}.tres"
-
-      - name: 预热编辑器缓存（避免 headless 崩溃）
+      - name: 校验 APK 产出
+        if: always()
         run: |
-          godot --headless --editor --quit || true
+          ls -lh android/app/build/outputs/apk/*/*.apk 2>/dev/null || {
+            echo "::error::没有找到 APK"; ls -lhR android/app/build/outputs/ 2>/dev/null; exit 1; }
 
-      - name: GDScript 预检（快速抓解析错误）
-        continue-on-error: true
+      - name: 校验 APK 包名
+        if: always()
         run: |
-          set -uo pipefail
-          python3 tools/check_gd.py || {
-            echo "::warning::预检发现问题，继续构建但很可能失败，请按上面提示修正"; }
+          APK=$(ls android/app/build/outputs/apk/*/*.apk | head -1)
+          echo "产物: $APK"
+          ID=$(aapt dump badging "$APK" | head -1 | sed -E "s/.*package: name='([^']+)'.*/\1/")
+          echo "解析到包名: $ID"
+          [ "$ID" = "xfan.games.gun" ] || { echo "::error::APK 包名是 $ID，应为 xfan.games.gun"; exit 1; }
+          echo "APK 包名校验通过"
 
-      - name: 检查资源完整性（缺失只警告，并尽量自动补全）
-        run: |
-          set -euo pipefail
-          echo "=== 仓库里实际提交了哪些 assets ==="
-          git ls-files assets/ | sed 's/^/    /' || true
-          echo
-          echo "=== 是否有文件被 .gitignore 挡住 ==="
-          if git check-ignore -v assets/fonts/ui_font.ttf assets/splash/splash.ogv \
-              assets/splash/splash_fallback.png assets/sfx/shoot.wav 2>/dev/null; then
-            echo "    ↑ 上面这些被忽略了，请用 git add -f 强制添加，或改 .gitignore"
-          else
-            echo "    （未被忽略）"
-          fi
-          echo
-          echo "=== 关键资源 ==="
-          MISSING_SFX=0
-          for f in \
-            assets/fonts/ui_font.ttf \
-            assets/splash/splash.ogv \
-            assets/splash/splash_fallback.png \
-            assets/splash/splash_fallback.jpg \
-            assets/sfx/ui_click.wav assets/sfx/ui_transition.wav \
-            assets/sfx/shoot.wav assets/sfx/hitmark.wav \
-            assets/sfx/reload.wav assets/sfx/hurt.wav assets/sfx/step.wav ; do
-            if [ -f "$f" ]; then
-              echo "  [OK]      $f"
-            else
-              echo "  [MISSING] $f"
-              case "$f" in
-                assets/sfx/*.wav) MISSING_SFX=1 ;;
-              esac
-            fi
-          done
-
-          # 音效缺失就用纯标准库脚本现场合成，不依赖仓库里的二进制
-          if [ "$MISSING_SFX" -ne 0 ]; then
-            echo "::warning::部分音效缺失，用 tools/gen_sfx.py 自动合成"
-            python3 tools/gen_sfx.py || echo "::warning::音效合成失败，游戏将静音运行"
-          fi
-
-          # 开屏视频缺失：先用 ffmpeg 兜底生成一段，实在不行再回退静态图
-          if [ ! -f assets/splash/splash.ogv ]; then
-            echo "::warning::assets/splash/splash.ogv 缺失，尝试用 ffmpeg 兜底生成"
-            SRC_IMG=""
-            for cand in assets/splash/splash_fallback.jpg assets/splash/splash_fallback.png; do
-              [ -f "$cand" ] && SRC_IMG="$cand" && break
-            done
-            if [ -n "$SRC_IMG" ] && command -v ffmpeg > /dev/null 2>&1; then
-              ffmpeg -y -loglevel error -loop 1 -i "$SRC_IMG" -t 3 -r 30 \
-                -c:v libtheora -q:v 7 -pix_fmt yuv420p assets/splash/splash.ogv \
-                && echo "  已用 $SRC_IMG 兜底生成 splash.ogv" \
-                || echo "::warning::ffmpeg 生成失败，开屏将回退静态图"
-            fi
-            if [ ! -f assets/splash/splash.ogv ]; then
-              echo "::warning::开屏将回退到静态图（不影响构建）"
-            fi
-            echo "::warning::想要原版视频开屏，在本机执行：git add -f assets/splash/splash.ogv && git commit && git push"
-          fi
-          # 字体缺失：运行时会回退到引擎默认字体，不影响构建
-          if [ ! -f assets/fonts/ui_font.ttf ]; then
-            echo "::warning::assets/fonts/ui_font.ttf 缺失，中文可能显示异常（不影响构建）"
-          fi
-          echo "资源检查结束，继续构建"
-
-      - name: 导入项目资源
-        run: |
-          set -euo pipefail
-          mkdir -p build
-          godot --headless --import 2>&1 | tee build/import.log | tail -30
-          # 只抓真正的脚本解析 / 编译错误。
-          # 不要笼统 grep "error" —— 资源缺失之类的告警会误伤，
-          # 而所有 assets 都做了运行时降级，缺了也不该阻断构建。
-          if grep -E "SCRIPT ERROR|Parse Error|Compile Error|Failed to load script|Failed to create an autoload" build/import.log; then
-            echo "::error::导入阶段存在 GDScript 错误，见 build/import.log"
-            exit 1
-          fi
-          echo "导入完成"
-
-      - name: 导出 APK
-        id: export
-        run: |
-          set -euo pipefail
-          mkdir -p build
-          BT="${{ github.event.inputs.build_type || 'release' }}"
-          OUT="$PWD/build/breakbind-battlefield.apk"
-          echo "构建类型: $BT   输出: $OUT"
-
-          # 必须用绝对路径；且 keystore 密码与 key 密码一致
-          KS="${KEYSTORE_PATH:-$HOME/breakbind.keystore}"
-          KPASS="${KEYSTORE_PASS:-xfangames}"
-          KALIAS="${KEYSTORE_ALIAS:-xfan}"
-          export GODOT_ANDROID_KEYSTORE_RELEASE_PATH="$KS"
-          export GODOT_ANDROID_KEYSTORE_RELEASE_USER="$KALIAS"
-          export GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD="$KPASS"
-          export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="$KS"
-          export GODOT_ANDROID_KEYSTORE_DEBUG_USER="$KALIAS"
-          export GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD="$KPASS"
-          echo "release keystore: $GODOT_ANDROID_KEYSTORE_RELEASE_PATH"
-          test -f "$GODOT_ANDROID_KEYSTORE_RELEASE_PATH" \
-            || { echo "::error::keystore 不存在"; exit 1; }
-
-          # 完整日志落盘，不再让 tail 吞掉退出码
-          if [ "$BT" = "debug" ]; then
-            godot --headless --verbose --export-debug "Android" "$OUT" 2>&1 | tee build/export.log
-            STATUS=${PIPESTATUS[0]}
-          else
-            godot --headless --verbose --install-android-build-template --export-release "Android" "$OUT" 2>&1 | tee build/export.log
-            STATUS=${PIPESTATUS[0]}
-            if [ "$STATUS" -ne 0 ] || [ ! -f "$OUT" ]; then
-              echo "::warning::release 导出失败，自动回退到 debug 导出"
-              rm -f "$OUT"
-              godot --headless --verbose --install-android-build-template --export-debug "Android" "$OUT" 2>&1 | tee build/export-debug.log
-              STATUS=${PIPESTATUS[0]}
-              cat build/export-debug.log >> build/export.log
-            fi
-          fi
-          echo "godot 退出码: $STATUS"
-
-          # 无论成功失败都把关键报错打到日志里
-          echo "----- 日志中的错误行 -----"
-          grep -inE "error|failed|cannot|could not|unable|exception|not found" build/export.log | head -40 || true
-          echo "--------------------------"
-
-          if [ "$STATUS" -ne 0 ]; then
-            echo "::error::Godot 导出失败（退出码 $STATUS），完整日志见 build/export.log"
-            exit 1
-          fi
-          if [ ! -f "$OUT" ]; then
-            echo "::error::导出结束但未找到 $OUT"
-            ls -lhR build/ || true
-            exit 1
-          fi
-          ls -lh "$OUT"
-
-      - name: 上传完整导出日志
+      - name: 上传 APK
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: export-log
-          path: build/*.log
-          if-no-files-found: warn
-
-      - name: 校验 APK 包名与签名
-        if: success()
-        run: |
-          set -euo pipefail
-          OUT="$PWD/build/breakbind-battlefield.apk"
-          AAPT="$ANDROID_HOME/build-tools/34.0.0/aapt"
-          if [ -x "$AAPT" ]; then
-            echo "=== aapt dump badging ==="
-            "$AAPT" dump badging "$OUT" | head -8
-            PKG=$("$AAPT" dump badging "$OUT" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")
-            echo "解析到的包名: $PKG"
-            if [ "$PKG" != "xfan.games.gun" ]; then
-              echo "::error::包名不对（期望 xfan.games.gun，实际 $PKG）"
-              exit 1
-            fi
-            echo "::notice::包名校验通过: $PKG"
-          else
-            echo "::warning::找不到 aapt，跳过包名校验"
-          fi
-          ls -lh "$OUT"
-
-      - name: 上传 APK 产物
-        uses: actions/upload-artifact@v4
-        with:
-          name: breakbind-battlefield-apk
-          path: build/*.apk
+          name: breakbind-battlefield
+          path: android/app/build/outputs/apk/*/*.apk
           if-no-files-found: error
 
-      - name: 发布到 Release
+      - name: 上传构建日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+
+      - name: 发布 Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: build/*.apk
-          generate_release_notes: true
+          files: android/app/build/outputs/apk/*/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

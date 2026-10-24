@@ -1,0 +1,191 @@
+/* 破绷战场 —— 横屏 1280x720 基准，全屏无滚动 */
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  width: 100%; height: 100%;
+  background: #07080c;
+  overflow: hidden;
+  font-family: system-ui, -apple-system, "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  color: #e8ecf4;
+  /* 关键：禁止浏览器手势，避免误触发下拉刷新 / 返回 */
+  touch-action: none;
+  overscroll-behavior: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#app { position: fixed; inset: 0; overflow: hidden; }
+
+/* 3D 画布在最底层 */
+canvas#gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+/* UI 层：盖在画布上。默认穿透，只有交互元素接收事件 */
+.layer { position: absolute; inset: 0; }
+.layer.pass { pointer-events: none; }
+.layer.pass > * { pointer-events: auto; }
+
+/* ★ 隐藏层必须 display:none —— DOM 里 display:none 的元素
+   确实不参与事件命中，不会出现"隐藏层吞掉点击"的问题。 */
+.hidden { display: none !important; }
+
+button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+
+/* 通用按钮：白色描边，一眼可辨可点击 */
+.btn {
+  border: 2px solid rgba(255,255,255,.55);
+  border-radius: 14px;
+  background: rgba(22,25,34,.92);
+  color: #e8ecf4;
+  font-size: 20px;
+  padding: 14px 22px;
+  transition: transform .08s, background .12s;
+}
+.btn:active { transform: scale(.97); background: rgba(45,52,70,.95); }
+.btn.primary { background: rgba(178,32,36,.92); border-color: rgba(255,255,255,.7); }
+.btn.ghost { background: rgba(30,34,44,.85); }
+
+/* ---------------- 开屏 ---------------- */
+#splash { background: #07080c; display: flex; align-items: center; justify-content: center; }
+#splash video, #splash img {
+  width: 100%; height: 100%; object-fit: cover;
+}
+#splash .skip {
+  position: absolute; right: 24px; top: 24px;
+  padding: 12px 22px; border-radius: 999px;
+  background: rgba(15,17,24,.75); border: 2px solid rgba(255,255,255,.35);
+  font-size: 18px;
+}
+#splash .bar {
+  position: absolute; left: 8%; right: 8%; bottom: 46px; height: 6px;
+  background: rgba(255,255,255,.14); border-radius: 3px; overflow: hidden;
+}
+#splash .bar > i { display: block; height: 100%; width: 0; background: #e63c42; }
+
+/* ---------------- 加载 ---------------- */
+#loading { background: #07080c; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 22px; }
+#loading .ring {
+  width: 74px; height: 74px; border-radius: 50%;
+  border: 4px solid rgba(255,255,255,.12); border-top-color: #e63c42;
+  animation: spin .9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+#loading .pct { font-size: 26px; letter-spacing: 2px; }
+#loading .tip { font-size: 18px; color: #8b93a6; }
+#loading .bar { width: 44%; height: 8px; background: rgba(255,255,255,.12); border-radius: 4px; overflow: hidden; }
+#loading .bar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg,#e63c42,#ff7a45); }
+
+/* ---------------- 主菜单 ---------------- */
+#menu { background: radial-gradient(circle at 50% 28%, #2a1114 0%, #0b0d13 62%, #07080c 100%); }
+#menu .wrap { position: absolute; inset: 6% 5%; display: flex; align-items: center; gap: 44px; }
+#menu .left { flex: 1; display: flex; flex-direction: column; justify-content: center; }
+#menu .title { font-size: 58px; font-weight: 700; letter-spacing: 6px;
+  color: #fff3ef; text-shadow: 0 0 22px rgba(224,60,66,.55); }
+#menu .sub { margin-top: 10px; font-size: 18px; letter-spacing: 4px; color: #8fa0bd; }
+#menu .foot { margin-top: 26px; font-size: 16px; color: #6a7387; }
+#menu .right { width: 46%; max-width: 520px; display: flex; flex-direction: column; gap: 16px; }
+#menu .mode {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 18px 24px; border-radius: 16px; text-align: left;
+  border: 2px solid rgba(255,255,255,.4);
+}
+#menu .mode .t { font-size: 30px; font-weight: 600; }
+#menu .mode .d { font-size: 17px; opacity: .85; }
+#menu .gear {
+  position: absolute; right: 22px; top: 20px;
+  padding: 12px 26px; border-radius: 14px; font-size: 20px;
+  border: 2px solid rgba(255,120,120,.6); background: rgba(20,22,30,.9);
+}
+
+/* ---------------- 设置面板 ---------------- */
+#settings { background: rgba(0,0,0,.62); display: flex; align-items: center; justify-content: center; }
+#settings .panel {
+  width: 86%; max-width: 1040px; max-height: 88%;
+  display: flex; gap: 16px;
+  background: rgba(14,16,22,.98); border: 2px solid rgba(255,255,255,.16);
+  border-radius: 18px; padding: 18px; overflow: hidden;
+}
+#settings .tabs { width: 190px; display: flex; flex-direction: column; gap: 10px; }
+#settings .tabs button { padding: 14px 10px; font-size: 19px; }
+#settings .tabs button.on { background: rgba(178,32,36,.9); border-color: rgba(255,255,255,.8); }
+#settings .body { flex: 1; overflow-y: auto; padding-right: 6px; }
+#settings .row { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+#settings .row > label { min-width: 130px; font-size: 18px; color: #b9c2d6; }
+#settings .fpsbtns { display: flex; gap: 8px; flex-wrap: wrap; }
+#settings .fpsbtns button { min-width: 74px; padding: 10px 12px; font-size: 18px; }
+#settings .fpsbtns button.on { background: rgba(178,32,36,.92); border-color: #fff; }
+#settings input[type=range] { flex: 1; min-width: 160px; height: 34px; }
+#settings .val { min-width: 56px; font-size: 17px; color: #9fb0cc; text-align: right; }
+#settings .note { font-size: 15px; color: #7f8aa0; margin-top: 4px; }
+#settings .preview {
+  width: 240px; height: 150px; border-radius: 12px; position: relative;
+  background: repeating-linear-gradient(45deg,#1a1d26 0 12px,#20242f 12px 24px);
+  border: 2px solid rgba(255,255,255,.14);
+}
+#settings .swatches { display: flex; gap: 10px; flex-wrap: wrap; }
+#settings .sw { width: 42px; height: 42px; border-radius: 50%; border: 2px solid rgba(255,255,255,.5); }
+#settings .sw.on { border-color: #fff; box-shadow: 0 0 0 3px rgba(255,255,255,.28); }
+#settings .close { margin-top: auto; padding: 14px; font-size: 19px; }
+
+/* 控件编辑画布 */
+#settings .canvas { position: relative; width: 100%; height: 340px;
+  background: repeating-linear-gradient(45deg,#151821 0 14px,#1b1f2a 14px 28px);
+  border: 2px solid rgba(255,255,255,.16); border-radius: 12px; overflow: hidden; }
+#settings .canvas .proxy {
+  position: absolute; border-radius: 14px;
+  background: rgba(60,72,96,.9); border: 2px solid rgba(255,255,255,.5);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px; color: #dfe6f2;
+}
+#settings .canvas .proxy.on { border-color: #ff5961; box-shadow: 0 0 0 3px rgba(255,89,97,.3); }
+
+/* ---------------- 游戏 HUD ---------------- */
+#hud { pointer-events: none; }
+#hud .stat { position: absolute; left: 14px; top: 12px; font-size: 20px;
+  color: #7dff9a; text-shadow: 0 2px 6px #000; font-variant-numeric: tabular-nums; }
+#hud .score { position: absolute; left: 50%; top: 10px; transform: translateX(-50%);
+  font-size: 26px; text-shadow: 0 2px 8px #000; }
+#hud .exit { position: absolute; right: 14px; top: 12px; pointer-events: auto;
+  padding: 10px 20px; font-size: 18px; border-radius: 12px;
+  background: rgba(60,18,22,.9); border: 2px solid rgba(255,255,255,.5); }
+#hud .bottom { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 6px; }
+#hud .stance { font-size: 17px; color: #b8c6e0; text-shadow: 0 2px 6px #000; }
+#hud .hpwrap { display: flex; align-items: center; gap: 10px; }
+#hud .hpbar { width: 300px; height: 16px; border-radius: 8px;
+  background: rgba(0,0,0,.5); border: 2px solid rgba(255,255,255,.25); overflow: hidden; }
+#hud .hpbar > i { display: block; height: 100%; width: 100%;
+  background: linear-gradient(90deg,#2fbf58,#6ee08a); transition: width .12s; }
+#hud .hpnum { font-size: 20px; font-variant-numeric: tabular-nums; text-shadow: 0 2px 6px #000; }
+#hud .ammo { font-size: 32px; color: #ffe08a; font-variant-numeric: tabular-nums;
+  text-shadow: 0 2px 8px #000; }
+#hud .tip { font-size: 18px; color: #ff9a5e; text-shadow: 0 2px 6px #000; min-height: 22px; }
+#hud .notice { position: absolute; left: 50%; top: 42%; transform: translate(-50%,-50%);
+  font-size: 30px; color: #ff5b5b; text-shadow: 0 3px 10px #000; text-align: center; }
+#hud .killfeed { position: absolute; right: 14px; top: 70px; display: flex;
+  flex-direction: column; gap: 4px; align-items: flex-end; }
+#hud .killfeed div { font-size: 16px; background: rgba(0,0,0,.45);
+  padding: 4px 10px; border-radius: 6px; }
+#hud .center-timer { position: absolute; left: 50%; top: 34%; transform: translate(-50%,-50%);
+  font-size: 44px; color: #8effa8; text-shadow: 0 3px 12px #000; }
+#hud .cancel { position: absolute; left: 50%; top: 48%; transform: translateX(-50%);
+  pointer-events: auto; padding: 12px 30px; font-size: 20px; border-radius: 12px;
+  background: rgba(90,30,28,.92); border: 2px solid rgba(255,255,255,.5); }
+
+/* 触摸控件容器：整层穿透，每个控件自己接收事件 */
+#touch { pointer-events: none; }
+.ctrl {
+  position: absolute; pointer-events: auto;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 17px; color: #fff;
+  background: rgba(40,46,60,.55);
+  border: 2px solid rgba(255,255,255,.45);
+  text-shadow: 0 1px 4px #000;
+}
+.ctrl.fire { background: rgba(150,26,30,.62); font-size: 20px; }
+.ctrl.stick { background: rgba(40,46,60,.34); }
+.ctrl.active { filter: brightness(1.35); border-color: #fff; }
+
+/* 准星 */
+#crosshair { position: absolute; inset: 0; pointer-events: none; }
