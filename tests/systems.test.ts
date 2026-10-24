@@ -4,7 +4,17 @@ import {
   defaultSettings, sanitize, FPS_OPTIONS, SETTINGS_KEY, type Settings,
 } from '../src/core/settings';
 import { createMeter, tickMeter, shouldRender, createAccum, pump } from '../src/core/loop';
-import { createBot, stepBot, hurtBot, BOT_TUNING } from '../src/game/bot';
+import { createBot, stepBot, hurtBot, BOT_TUNING, type BotWorld } from '../src/game/bot';
+
+/** 测试用世界：30 的方形场地，中间没有障碍 */
+const WORLD: BotWorld = {
+  playerPos: { x: 0, y: 0, z: 0 },
+  playerAlive: true,
+  bounds: 30,
+  obstacles: [],
+  radius: 0.42,
+  heightAt: () => 0,
+};
 import { DEFAULT_TUNING } from '../src/game/player';
 import { raycastTarget, dirFrom, pickTarget, eyePos } from '../src/game/combat';
 import { v3 } from '../src/core/vec';
@@ -126,13 +136,13 @@ test('人机: 创建后处于巡逻状态', () => {
 
 test('人机: 玩家进入视野会转为追击/交战', () => {
   const b = createBot('兵', v3(0, 0, 0));
-  const r = stepBot(b, { playerPos: v3(5, 0, 0), playerAlive: true, bounds: 30 }, 1 / 60, DEFAULT_TUNING);
+  const r = stepBot(b, { ...WORLD, playerPos: v3(5, 0, 0), playerAlive: true }, 1 / 60, DEFAULT_TUNING);
   assert.ok(r.bot.phase === 'chase' || r.bot.phase === 'engage', `应追击，实际 ${r.bot.phase}`);
 });
 
 test('人机: 远距离时保持巡逻', () => {
   const b = createBot('兵', v3(0, 0, 0));
-  const r = stepBot(b, { playerPos: v3(500, 0, 500), playerAlive: true, bounds: 600 }, 1 / 60, DEFAULT_TUNING);
+  const r = stepBot(b, { ...WORLD, bounds: 600, playerPos: v3(500, 0, 500), playerAlive: true }, 1 / 60, DEFAULT_TUNING);
   assert.equal(r.bot.phase, 'patrol');
 });
 
@@ -145,7 +155,7 @@ test('人机: 死亡后进入倒地，到时间重生且满血', () => {
 
   let t = 0;
   while (b.phase === 'down' && t < 10) {
-    b = stepBot(b, { playerPos: v3(999, 0, 999), playerAlive: true, bounds: 600 }, 1 / 30, DEFAULT_TUNING).bot;
+    b = stepBot(b, { ...WORLD, bounds: 600, playerPos: v3(999, 0, 999), playerAlive: true }, 1 / 30, DEFAULT_TUNING).bot;
     t += 1 / 30;
   }
   assert.equal(b.phase, 'patrol', '应重生');
@@ -156,7 +166,7 @@ test('人机: 死亡后进入倒地，到时间重生且满血', () => {
 test('人机: 不会走出地图边界', () => {
   let b = createBot('兵', v3(0, 0, 0));
   for (let i = 0; i < 600; i++) {
-    b = stepBot(b, { playerPos: v3(9999, 0, 9999), playerAlive: true, bounds: 30 }, 1 / 60, DEFAULT_TUNING).bot;
+    b = stepBot(b, { ...WORLD, playerPos: v3(9999, 0, 9999), playerAlive: true }, 1 / 60, DEFAULT_TUNING).bot;
   }
   assert.ok(Math.abs(b.state.pos.x) <= 30.001, `x 应受限，实际 ${b.state.pos.x.toFixed(1)}`);
   assert.ok(Math.abs(b.state.pos.z) <= 30.001, `z 应受限，实际 ${b.state.pos.z.toFixed(1)}`);

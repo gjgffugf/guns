@@ -9,11 +9,13 @@ import {
   createWeapon, tryFire, tryReload, stepWeapon, isReloading, def, refill,
   type WeaponState, type WeaponKind,
 } from './weapon';
-import { createBot, stepBot, hurtBot } from './bot';
+import { createBot, stepBot, hurtBot, safeSpawn } from './bot';
 import { applyLook } from './aim';
 import { eyePos, dirFrom, pickTarget, hasLineOfSight } from './combat';
 import type { Settings } from '../core/settings';
 import type { V3 } from '../core/vec';
+import { sfx } from '../core/sfx';
+import type { StepWorld } from './player';
 
 /** 单人对局：玩家 + 1 名战术人机，先到 10 分获胜，10 分钟倒计时 */
 
@@ -32,6 +34,9 @@ export interface SessionUI {
   pushKill(m: string): void;
   setAds(on: boolean): void;
 }
+
+/** 角色圆柱半径（碰撞用） */
+const BODY_R = 0.42;
 
 export class SoloSession {
   private scene = new THREE.Scene();
@@ -105,7 +110,7 @@ export class SoloSession {
     this.playerSoldier = buildSoldier();
     this.scene.add(this.playerSoldier.root);
 
-    this.p = createPlayer({ x: 0, y: 0, z: 20 });
+    this.p = createPlayer(safeSpawn(spawnPoints(), OBSTACLES, BODY_R));
     this.weapon = createWeapon('ranged', 150);
 
     this.spawnBots();
@@ -116,7 +121,7 @@ export class SoloSession {
   private spawnBots(): void {
     const pts = spawnPoints();
     for (let i = 0; i < 1; i++) {
-      const b = createBot(`战术兵${i + 1}`, pts[(i + 2) % pts.length]);
+      const b = createBot(`战术兵${i + 1}`, safeSpawn(pts, OBSTACLES, BODY_R));
       const m = buildSoldier(0xe8e4dc);
       this.scene.add(m.root);
       const id = `bot${i}`;
@@ -141,9 +146,28 @@ export class SoloSession {
   /** 渲染是否可用（供上层提示） */
   get renderOK(): boolean { return !this.noGL; }
 
+  /** 碰撞与地面（玩家、人机共用同一套） */
+  private stepWorld(): StepWorld {
+    return {
+      bounds: ARENA - 0.6,
+      obstacles: OBSTACLES,
+      radius: BODY_R,
+      heightAt: groundHeight,
+    };
+  }
+
+  /** 调试/测试用：当前朝向 */
+  get debugYaw(): number { return this.p.yaw; }
+  get debugPitch(): number { return this.pitch; }
+  get debugPos(): V3 { return this.p.pos; }
+
   // ---------------- 输入接口 ----------------
   setStick(x: number, y: number): void { this.input.axisX = x; this.input.axisY = y; }
-  setJump(v: boolean): void { this.input.jumpPressed = v; }
+  setJump(v: boolean): void {
+    this.input.jumpPressed = v;
+    // 只有真的能起跳时才出声（避免在空中乱按一直响）
+    if (v && (this.p.grounded || this.p.coyote > 0)) sfx.jump();
+  }
   setFire(v: boolean): void { this.wantFire = v; }
   toggleAds(): void {
     this.ads = !this.ads;
@@ -158,7 +182,10 @@ export class SoloSession {
   }
   reload(): void {
     const r = tryReload(this.weapon);
-    if (r.ok) this.weapon = r.weapon;
+    if (r.ok) {
+      this.weapon = r.weapon;
+      sfx.reload();
+    }
     else if (r.reason === '没有备用弹药') this.ui.setTip('没有备用弹药');
     else if (r.reason === '弹匣已满') this.ui.setTip('弹匣已满');
   }
@@ -166,6 +193,7 @@ export class SoloSession {
     const next: WeaponKind = this.weapon.kind === 'ranged' ? 'melee' : 'ranged';
     this.weapon = createWeapon(next, this.weapon.reserve);
     this.playerSoldier.parts.gun.visible = next === 'ranged';
+    sfx.click();
     this.ui.setTip(next === 'melee' ? '已切换到刀' : '已切换到步枪');
   }
   look(dx: number, dy: number): void {
@@ -229,15 +257,12 @@ export class SoloSession {
     if (this.ui) this.ui.setNotice('');
 
     // ---- 玩家 ----
-    this.p = step(this.p, this.input, dt, DEFAULT_TUNING);
+    // ★ 传入世界信息：碰撞 + 地面高度都在 step 内部完成，
+    //   所以不会出现"走出场外"或"穿墙"。
+    const wasGrounded = this.p.grounded;
+    this.p = step(this.p, this.input, dt, DEFAULT_TUNING, this.stepWorld());
     this.input.jumpPressed = false;
-    // 高地：踩上高台
-    const gh = groundHeight(this.p.pos.x, this.p.pos.z);
-    if (this.p.pos.y < gh) {
-      this.p.pos.y = gh;
-      if (this.p.vel.y < 0) this.p.vel.y = 0;
-      this.p.grounded = true;
-    }
+    if (!wasGrounded && this.p.grounded) sfx.land();
 
     // ---- 武器 ----
     this.weapon = stepWeapon(this.weapon, dt);
@@ -245,9 +270,11 @@ export class SoloSession {
       const r = tryFire(this.weapon);
       if (r.fired) {
         this.weapon = r.weapon;
+        sfx.shoot(this.weapon.kind === 'melee');
         this.shoot(r.damage);
       } else if (r.reason === 'empty') {
         this.ui.setTip('弹匣已空 · 点击换弹');
+        sfx.dryFire();
         this.wantFire = false;
       }
     }
@@ -294,10 +321,16 @@ export class SoloSession {
   private updateBots(dt: number): void {
     for (const [id, b] of this.bots) {
       const r = stepBot(b, {
-        playerPos: this.p.pos, playerAlive: this.p.alive, bounds: ARENA - 1,
+        playerPos: this.p.pos,
+        playerAlive: this.p.alive,
+        bounds: ARENA - 0.6,
+        obstacles: OBSTACLES,
+        radius: BODY_R,
+        heightAt: groundHeight,
       }, dt, DEFAULT_TUNING);
       if (r.hitPlayer && this.p.alive) {
         this.p = damage(this.p, 9);
+        sfx.hurt();
         if (!this.p.alive) this.onPlayerDown();
       }
       this.bots.set(id, r.bot);
@@ -334,7 +367,10 @@ export class SoloSession {
     this.bots.set(pick.id, hurt);
     if (!hurt.state.alive) {
       this.scoreSelf += 1;
+      sfx.kill();
       this.ui.pushKill(`击倒 ${hurt.name}`);
+    } else {
+      sfx.hit();
     }
   }
 
@@ -346,8 +382,7 @@ export class SoloSession {
   }
 
   private respawn(): void {
-    const pts = spawnPoints();
-    const p0 = pts[Math.floor(Math.random() * pts.length)];
+    const p0 = safeSpawn(spawnPoints(), OBSTACLES, BODY_R);
     this.p = createPlayer(p0);
     this.weapon = refill(createWeapon('ranged', 150), 150);
     this.ui.setNotice('');

@@ -1,5 +1,7 @@
 /** 极简 DOM 助手（避免引入框架，保持体积与可控性） */
 
+import { sfx } from '../core/sfx';
+
 type Attrs = Record<string, string | number | boolean | undefined>;
 
 export function el<K extends keyof HTMLElementTagNameMap>(
@@ -19,9 +21,22 @@ export function el<K extends keyof HTMLElementTagNameMap>(
   return n;
 }
 
-export function btn(label: string, cls = 'btn', onClick?: () => void): HTMLButtonElement {
+/**
+ * 按钮。默认带点击音 —— 在这里统一加，不用每个界面各自记得调，
+ * 也不会出现"主菜单有声、设置页没声"这种漏掉的情况。
+ * 需要静音的按钮传 silent=true。
+ */
+export function btn(
+  label: string,
+  cls = 'btn',
+  onClick?: () => void,
+  silent = false,
+): HTMLButtonElement {
   const b = el('button', { class: cls, type: 'button', text: label });
-  if (onClick) b.addEventListener('click', onClick);
+  b.addEventListener('click', () => {
+    if (!silent) sfx.click();
+    onClick?.();
+  });
   return b;
 }
 

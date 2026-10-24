@@ -30,15 +30,17 @@ export interface ControlCfg {
 
 /** 各控件在 1280x720 下的基准尺寸（中心对齐） */
 export const BASE_SIZE: Record<ControlKey, [number, number]> = {
-  stick: [272, 260],
-  fire: [96, 96],
-  ads: [96, 96],
-  jump: [96, 96],
-  crouch: [96, 96],
-  prone: [96, 96],
-  reload: [96, 96],
-  melee: [96, 96],
-  heal: [104, 104],
+  // 屏幕高只有 720，96px 的按钮占到 13% 高度，太占地方。
+  // 统一收到 76px（约 10.5%），摇杆也相应缩小，给视野留出空间。
+  stick: [228, 218],
+  fire: [78, 78],
+  ads: [76, 76],
+  jump: [76, 76],
+  crouch: [76, 76],
+  prone: [76, 76],
+  reload: [76, 76],
+  melee: [76, 76],
+  heal: [84, 84],
 };
 
 /** 默认中心点比例 */

@@ -8,6 +8,7 @@ import { Hud } from './ui/hud';
 import { TouchControls, type CtrlEvent, type LookEvent } from './input/controls';
 import { SoloSession } from './game/session';
 import { load, save, defaultSettings, type Settings } from './core/settings';
+import { sfx } from './core/sfx';
 import type { ControlKey } from './core/layout';
 
 /**
@@ -72,6 +73,7 @@ let session: SoloSession | null = null;
 let controls: TouchControls | null = null;
 
 function applySettings(): void {
+  sfx.setVolume(settings.masterVolume);
   if (controls) controls.setConfig(settings.controls);
   if (hud) hud.drawCrosshair(settings);
   if (session) session.look(0, 0);
@@ -79,6 +81,7 @@ function applySettings(): void {
 
 // ---------------- 开屏 -> 加载 -> 菜单 ----------------
 async function boot(): Promise<void> {
+  sfx.setVolume(settings.masterVolume);
   const splash = buildSplash(app);
   await splash.done;
 
@@ -204,6 +207,17 @@ function exitGame(): void {
   menu.open();
 }
 
+// ★ 首次真实用户手势时解锁音频。
+//   Android WebView 的 AudioContext 创建后是 suspended 状态，
+//   没有用户手势就不会出声 —— 这是"装上去没音效"最常见的原因。
+for (const ev of ['pointerdown', 'touchstart', 'mousedown'] as const) {
+  window.addEventListener(ev, () => sfx.unlock(), { once: true, passive: true });
+}
+// 从后台切回时也要恢复（部分 WebView 会挂起 AudioContext）
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) sfx.unlock();
+});
+
 // 阻止系统手势干扰
 document.addEventListener('gesturestart', (e) => e.preventDefault());
 document.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -218,5 +232,10 @@ boot().catch((err) => {
   menu.toast('启动异常，已返回主菜单');
 });
 
-// 便于调试
+// 便于调试 / 自动化验证（浏览器测试脚本靠它读游戏内部状态）
+interface DebugHook { session: SoloSession | null }
+(window as unknown as { __bb?: DebugHook }).__bb = {
+  get session(): SoloSession | null { return session; },
+};
+
 void defaultSettings;

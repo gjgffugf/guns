@@ -54,8 +54,9 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   border-radius: 14px;
   background: rgba(22,25,34,.92);
   color: #e8ecf4;
-  font-size: 20px;
-  padding: 14px 22px;
+  font-size: 17px;
+  padding: 10px 16px;
+  border-radius: 11px;
   transition: transform .08s, background .12s;
 }
 .btn:active { transform: scale(.97); background: rgba(45,52,70,.95); }
@@ -97,21 +98,21 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 #menu { background: radial-gradient(circle at 50% 28%, #2a1114 0%, #0b0d13 62%, #07080c 100%); }
 #menu .wrap { position: absolute; inset: 6% 5%; display: flex; align-items: center; gap: 44px; }
 #menu .left { flex: 1; display: flex; flex-direction: column; justify-content: center; }
-#menu .title { font-size: 58px; font-weight: 700; letter-spacing: 6px;
+#menu .title { font-size: 44px; font-weight: 700; letter-spacing: 4px;
   color: #fff3ef; text-shadow: 0 0 22px rgba(224,60,66,.55); }
-#menu .sub { margin-top: 10px; font-size: 18px; letter-spacing: 4px; color: #8fa0bd; }
-#menu .foot { margin-top: 26px; font-size: 16px; color: #6a7387; }
-#menu .right { width: 46%; max-width: 520px; display: flex; flex-direction: column; gap: 16px; }
+#menu .sub { margin-top: 8px; font-size: 15px; letter-spacing: 3px; color: #8fa0bd; }
+#menu .foot { margin-top: 18px; font-size: 14px; color: #6a7387; }
+#menu .right { width: 44%; max-width: 420px; display: flex; flex-direction: column; gap: 11px; }
 #menu .mode {
-  display: flex; flex-direction: column; gap: 4px;
-  padding: 18px 24px; border-radius: 16px; text-align: left;
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 11px 16px; border-radius: 13px; text-align: left;
   border: 2px solid rgba(255,255,255,.4);
 }
-#menu .mode .t { font-size: 30px; font-weight: 600; }
-#menu .mode .d { font-size: 17px; opacity: .85; }
+#menu .mode .t { font-size: 22px; font-weight: 600; }
+#menu .mode .d { font-size: 13px; opacity: .85; }
 #menu .gear {
-  position: absolute; right: 22px; top: 20px;
-  padding: 12px 26px; border-radius: 14px; font-size: 20px;
+  position: absolute; right: 18px; top: 16px;
+  padding: 8px 18px; border-radius: 12px; font-size: 16px;
   border: 2px solid rgba(255,120,120,.6); background: rgba(20,22,30,.9);
 }
 
@@ -127,10 +128,10 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 #settings .tabs button { padding: 14px 10px; font-size: 19px; }
 #settings .tabs button.on { background: rgba(178,32,36,.9); border-color: rgba(255,255,255,.8); }
 #settings .body { flex: 1; overflow-y: auto; padding-right: 6px; }
-#settings .row { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
-#settings .row > label { min-width: 130px; font-size: 18px; color: #b9c2d6; }
-#settings .fpsbtns { display: flex; gap: 8px; flex-wrap: wrap; }
-#settings .fpsbtns button { min-width: 74px; padding: 10px 12px; font-size: 18px; }
+#settings .row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+#settings .row > label { min-width: 104px; font-size: 15px; color: #b9c2d6; }
+#settings .fpsbtns { display: flex; gap: 6px; flex-wrap: wrap; }
+#settings .fpsbtns button { min-width: 58px; padding: 7px 10px; font-size: 15px; }
 #settings .fpsbtns button.on { background: rgba(178,32,36,.92); border-color: #fff; }
 #settings input[type=range] { flex: 1; min-width: 160px; height: 34px; }
 #settings .val { min-width: 56px; font-size: 17px; color: #9fb0cc; text-align: right; }

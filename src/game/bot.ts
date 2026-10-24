@@ -1,9 +1,16 @@
 import { V3, v3, distXZ, clamp } from '../core/vec';
 import { createPlayer, step, damage, type PlayerState, type PlayerInput, type PlayerTuning } from './player';
+import type { StepWorld } from './player';
+import { insideAny, type Cylinder } from './collide';
 
 /**
  * 战术人机（纯逻辑，可测试）。
- * 行为：巡逻 -> 发现玩家 -> 接近到射程内 -> 开火 -> 血量归零倒地 -> 若干秒后重生。
+ *
+ * 行为：巡逻 -> 发现玩家 -> 接近到射程内 -> 站定开火 -> 倒地 -> 重生。
+ *
+ * ★ 曾经的毛病：engage 阶段一直绕着玩家转圈，玩家很难瞄。
+ *   现在改成"保持距离 + 开火时站定 + 少量横向微调"，
+ *   并且只有在换弹冷却期间才做位置调整，正面交火时是可打的。
  */
 
 export type BotPhase = 'patrol' | 'chase' | 'engage' | 'down';
@@ -15,33 +22,45 @@ export interface Bot {
   target: V3;
   /** 开火冷却 */
   fireCd: number;
-  /** 击杀 / 死亡计数 */
   kills: number;
   deaths: number;
   /** 倒地后的重生倒计时 */
   respawn: number;
   name: string;
+  /** 横向微调的方向（-1/0/1），每隔几秒换一次 */
+  strafeDir: number;
+  strafeLeft: number;
+  /** 卡住的累计时间，用于脱困 */
+  stuck: number;
+  lastX: number;
+  lastZ: number;
 }
 
 export interface BotTuning {
   sightRange: number;
   fireRange: number;
+  /** 理想交战距离 */
+  keepRange: number;
   fireInterval: number;
   damage: number;
   respawnTime: number;
-  moveJitter: number;
+  /** 开火时的命中率（距离越近越高） */
+  accuracyNear: number;
+  accuracyFar: number;
 }
 
 export const BOT_TUNING: BotTuning = {
-  sightRange: 45,
-  fireRange: 28,
-  fireInterval: 0.85,
+  sightRange: 42,
+  fireRange: 26,
+  keepRange: 14,
+  fireInterval: 0.95,
   damage: 9,
   respawnTime: 3.0,
-  moveJitter: 0.35,
+  accuracyNear: 0.62,
+  accuracyFar: 0.28,
 };
 
-/** 巡逻点（地图四周） */
+/** 巡逻点（地图四周，远离掩体） */
 export const PATROL_POINTS: V3[] = [
   v3(-18, 0, -18), v3(18, 0, -18), v3(18, 0, 18), v3(-18, 0, 18),
   v3(0, 0, -26), v3(0, 0, 26), v3(-26, 0, 0), v3(26, 0, 0),
@@ -57,6 +76,11 @@ export function createBot(name: string, pos: V3): Bot {
     deaths: 0,
     respawn: 0,
     name,
+    strafeDir: 0,
+    strafeLeft: 0,
+    stuck: 0,
+    lastX: pos.x,
+    lastZ: pos.z,
   };
 }
 
@@ -72,6 +96,12 @@ export interface BotWorld {
   playerAlive: boolean;
   /** 世界边界，避免人机走出地图 */
   bounds: number;
+  /** 障碍物（避免人机穿墙） */
+  obstacles: Cylinder[];
+  /** 地面高度 */
+  heightAt(x: number, z: number): number;
+  /** 角色半径 */
+  radius: number;
 }
 
 /**
@@ -84,18 +114,24 @@ export function stepBot(
   pt: PlayerTuning,
   bt: BotTuning = BOT_TUNING,
 ): { bot: Bot; hitPlayer: boolean } {
-  const n: Bot = { ...b, state: { ...b.state }, fireCd: Math.max(0, b.fireCd - dt) };
+  const n: Bot = {
+    ...b,
+    state: { ...b.state },
+    fireCd: Math.max(0, b.fireCd - dt),
+  };
   let hitPlayer = false;
 
   // ---- 倒地 / 重生 ----
   if (n.phase === 'down' || !n.state.alive) {
     n.phase = 'down';
     n.respawn = Math.max(0, n.respawn - dt);
-    if (n.respawn <= 0 && n.deaths >= 0) {
+    if (n.respawn <= 0) {
       const p = pickPatrol(Math.floor(Math.random() * PATROL_POINTS.length));
       n.state = createPlayer(v3(p.x, 0, p.z));
       n.phase = 'patrol';
       n.target = { ...p };
+      n.strafeLeft = 0;
+      n.stuck = 0;
     }
     return { bot: n, hitPlayer };
   }
@@ -111,70 +147,84 @@ export function stepBot(
     n.phase = 'patrol';
   }
 
-  // ---- 生成移动意图 ----
+  // ---- 移动意图 ----
   const inp: PlayerInput = {
     axisX: 0, axisY: 0, jumpPressed: false,
-    wantCrouch: false, wantProne: false, autoSprint: true,
+    wantCrouch: false, wantProne: false, autoSprint: false,
   };
 
-  let dest: V3;
+  // 面向玩家（交战时）或面向行进方向（巡逻时）
+  let faceX = 0;
+  let faceZ = 0;
+
   if (n.phase === 'patrol') {
     if (distXZ(n.state.pos, n.target) < 2.5) {
       n.target = pickPatrol(Math.floor(Math.random() * PATROL_POINTS.length));
     }
-    dest = n.target;
+    faceX = n.target.x - n.state.pos.x;
+    faceZ = n.target.z - n.state.pos.z;
+  } else {
+    faceX = world.playerPos.x - n.state.pos.x;
+    faceZ = world.playerPos.z - n.state.pos.z;
+    // 卡住了就随机换个横向方向脱困
+    n.strafeLeft -= dt;
+    if (n.strafeLeft <= 0) {
+      n.strafeLeft = 1.2 + Math.random() * 1.6;
+      n.strafeDir = [-1, 0, 0, 1][Math.floor(Math.random() * 4)];
+    }
+  }
+
+  const fl = Math.hypot(faceX, faceZ);
+  if (fl > 1e-4) {
+    n.state.yaw = Math.atan2(faceX, -faceZ);
+  }
+
+  if (n.phase === 'patrol') {
+    if (fl > 0.4) inp.axisY = -1;          // 向前走
   } else if (n.phase === 'chase') {
-    dest = world.playerPos;
-  } else {
-    // engage：保持距离，绕圈
-    const ang = Math.atan2(world.playerPos.x - n.state.pos.x, world.playerPos.z - n.state.pos.z);
-    const orbit = ang + 0.6;
-    const keep = bt.fireRange * 0.7;
-    dest = v3(
-      world.playerPos.x + Math.sin(orbit) * keep,
-      0,
-      world.playerPos.z + Math.cos(orbit) * keep,
-    );
-  }
-
-  // 朝向目标
-  const dx = dest.x - n.state.pos.x;
-  const dz = dest.z - n.state.pos.z;
-  const dl = Math.hypot(dx, dz);
-  if (dl > 0.001 && (n.phase !== 'engage' || dl > 1.0)) {
-    n.state.yaw = Math.atan2(dx, -dz);
-    // 摇杆推向目标
-    const fwd = -Math.cos(n.state.yaw);
-    const right = Math.sin(n.state.yaw);
-    const wx = dx / dl;
-    const wz = dz / dl;
-    const along = wx * right + wz * fwd;
-    const side = wx * right * 0 + 0;
-    void side;
-    inp.axisY = -clamp(along, -1, 1);
-    inp.axisX = clamp((wx * Math.cos(n.state.yaw) - wz * Math.sin(n.state.yaw)) * 0 , -1, 1);
-    // 简化：直接按世界方向推摇杆
     inp.axisY = -1;
+    inp.autoSprint = true;
   } else {
-    inp.axisY = 0;
-    inp.axisX = 0;
-    n.state.yaw = Math.atan2(
-      world.playerPos.x - n.state.pos.x,
-      -(world.playerPos.z - n.state.pos.z),
-    );
+    // ★ engage：保持距离，【不绕圈】
+    //   正对着玩家，只在冷却期间做小幅横向调整，开火瞬间站定 —— 好瞄也好打
+    if (d > bt.keepRange * 1.15) inp.axisY = -1;          // 太远，压上去
+    else if (d < bt.keepRange * 0.75) inp.axisY = 1;      // 太近，后退
+    else inp.axisY = 0;                                    // 距离合适，站定
+    // 冷却中才横移，开火时不横移
+    if (n.fireCd > 0.25) inp.axisX = n.strafeDir;
+    else inp.axisX = 0;
   }
 
-  n.state = step(n.state, inp, dt, pt);
+  const sw: StepWorld = {
+    bounds: world.bounds,
+    obstacles: world.obstacles,
+    radius: world.radius,
+    heightAt: world.heightAt,
+  };
+  n.state = step(n.state, inp, dt, pt, sw);
 
-  // ---- 边界约束 ----
-  n.state.pos.x = clamp(n.state.pos.x, -world.bounds, world.bounds);
-  n.state.pos.z = clamp(n.state.pos.z, -world.bounds, world.bounds);
+  // ---- 脱困：撞墙/卡住时换个巡逻点或掉头 ----
+  const moved = Math.hypot(n.state.pos.x - n.lastX, n.state.pos.z - n.lastZ);
+  const wants = Math.abs(inp.axisX) + Math.abs(inp.axisY) > 0.1;
+  if (wants && moved < 0.012) n.stuck += dt; else n.stuck = Math.max(0, n.stuck - dt * 2);
+  n.lastX = n.state.pos.x;
+  n.lastZ = n.state.pos.z;
+  if (n.stuck > 0.7) {
+    n.stuck = 0;
+    if (n.phase === 'patrol') {
+      n.target = pickPatrol(Math.floor(Math.random() * PATROL_POINTS.length));
+    } else {
+      n.strafeDir = -n.strafeDir || 1;
+      n.strafeLeft = 0.8;
+    }
+  }
 
   // ---- 开火 ----
   if (n.phase === 'engage' && world.playerAlive && n.fireCd <= 0 && d <= bt.fireRange) {
     n.fireCd = bt.fireInterval;
-    // 命中判定：距离越远命中率越低（简单模拟）
-    const acc = 0.55 + 0.3 * (1 - d / bt.fireRange);
+    // 距离越远命中率越低
+    const k = clamp(d / bt.fireRange, 0, 1);
+    const acc = bt.accuracyNear * (1 - k) + bt.accuracyFar * k;
     if (Math.random() < acc) hitPlayer = true;
   }
 
@@ -191,4 +241,12 @@ export function hurtBot(b: Bot, amount: number): Bot {
     n.respawn = BOT_TUNING.respawnTime;
   }
   return n;
+}
+
+/** 挑一个不在障碍物里的出生点 */
+export function safeSpawn(pts: V3[], obstacles: Cylinder[], radius: number): V3 {
+  for (const p of pts) {
+    if (!insideAny(p, radius, obstacles)) return p;
+  }
+  return pts[0] ?? v3(0, 0, 0);
 }

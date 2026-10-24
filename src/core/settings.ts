@@ -31,7 +31,7 @@ export const SETTINGS_KEY = 'bb.settings.v1';
 export function defaultSettings(): Settings {
   return {
     targetFps: 60,
-    sensitivity: 0.7,          // 默认灵敏度（比初版降低 30%）
+    sensitivity: 1.25,         // 默认灵敏度（0.7 偏迟钝，回调上来）
     autoSprint: true,
     invertY: false,
     masterVolume: 0.9,

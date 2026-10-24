@@ -120,6 +120,9 @@ export class TouchControls {
       const node = this.nodes.get(hit);
       if (node) node.classList.add('active');
       this.emitCtrl(hit, 'down', ev);
+      // 摇杆按下时同步记一次视角基准点，
+      // 这样"按住开火不动 + 另一根手指转视角"两根手指互不干扰。
+      this.onLook({ dx: 0, dy: 0, pointerId: ev.pointerId, phase: 'down' });
     } else {
       // 空白区 -> 转视角
       this.looking.add(ev.pointerId);
@@ -138,8 +141,12 @@ export class TouchControls {
     if (key) {
       ev.preventDefault();
       this.emitCtrl(key, 'move', ev);
-      // ★ 长按开火时滑动同时转视角（滑动开火）
-      this.onLook({ dx, dy, pointerId: ev.pointerId, phase: 'move' });
+      // ★ 按住按钮滑动时同时转视角（滑动开火 / 边跳边瞄）。
+      //   唯一例外是摇杆：左手拇指在摇杆上滑动是【移动】，
+      //   如果这时还转视角，走位会被自己转晕。
+      if (key !== 'stick') {
+        this.onLook({ dx, dy, pointerId: ev.pointerId, phase: 'move' });
+      }
       return;
     }
     if (this.looking.has(ev.pointerId)) {

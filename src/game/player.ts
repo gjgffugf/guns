@@ -1,4 +1,5 @@
 import { V3, v3, clamp } from '../core/vec';
+import { resolveHorizontal, sweepMove, type Cylinder } from './collide';
 
 /**
  * 玩家运动学（纯逻辑，不依赖 DOM / three.js，可完整单元测试）。
@@ -37,6 +38,21 @@ export interface PlayerState {
   /** 土狼时间：刚离开地面还能补跳 */
   coyote: number;
   alive: boolean;
+}
+
+/**
+ * 步进所需的世界信息（可选）。
+ * 不传就退化成"平地无碰撞"，方便测试纯运动学。
+ */
+export interface StepWorld {
+  /** 世界半边界 */
+  bounds: number;
+  /** 障碍物（圆柱近似） */
+  obstacles: Cylinder[];
+  /** 角色半径 */
+  radius: number;
+  /** 某点的地面高度（斜坡/高台） */
+  heightAt(x: number, z: number): number;
 }
 
 export interface PlayerTuning {
@@ -113,6 +129,7 @@ export function step(
   inp: PlayerInput,
   dt: number,
   t: PlayerTuning = DEFAULT_TUNING,
+  world?: StepWorld,
 ): PlayerState {
   const n: PlayerState = { ...s, pos: { ...s.pos }, vel: { ...s.vel } };
   if (!n.alive) return n;
@@ -185,17 +202,44 @@ export function step(
   n.vel.y -= t.gravity * dt;
 
   // ---- 积分 ----
-  n.pos.x += n.vel.x * dt;
+  const prevX = n.pos.x;
+  const prevZ = n.pos.z;
+  let rawX = prevX + n.vel.x * dt;
+  let rawZ = prevZ + n.vel.z * dt;
   n.pos.y += n.vel.y * dt;
-  n.pos.z += n.vel.z * dt;
 
-  // ---- 地面（地面高度 0）----
-  if (n.pos.y <= 0) {
-    n.pos.y = 0;
-    n.vel.y = 0;
+  // ---- 地面高度（斜坡 / 高台）----
+  const gh = world ? world.heightAt(rawX, rawZ) : 0;
+
+  // ---- 水平碰撞 ----
+  if (world) {
+    // 脚部高度决定能不能走上箱子/高台
+    const feet = n.pos.y;
+    const moved = sweepMove(
+      { x: prevX, y: n.pos.y, z: prevZ },
+      { x: rawX, y: n.pos.y, z: rawZ },
+      world.radius, feet, world.obstacles, world.bounds,
+    );
+    rawX = moved.x;
+    rawZ = moved.z;
+    // 撞墙就把该方向的速度清掉，避免贴着墙持续加速
+    if (Math.abs(moved.x - prevX) < 1e-9 && Math.abs(n.vel.x) > 1e-6) n.vel.x *= 0.2;
+    if (Math.abs(moved.z - prevZ) < 1e-9 && Math.abs(n.vel.z) > 1e-6) n.vel.z *= 0.2;
+  }
+  n.pos.x = rawX;
+  n.pos.z = rawZ;
+
+  if (n.pos.y <= gh) {
+    n.pos.y = gh;
+    if (n.vel.y < 0) n.vel.y = 0;
     n.grounded = true;
   } else {
     n.grounded = false;
+  }
+
+  // 保险：万一仍卡在障碍里（例如生成点重叠），推出来
+  if (world) {
+    n.pos = resolveHorizontal(n.pos, world.radius, n.pos.y, world.obstacles, world.bounds);
   }
 
   return n;

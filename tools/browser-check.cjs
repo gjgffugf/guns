@@ -211,6 +211,68 @@ const ok = (c, name, extra = '') => {
     ok(scroll.sh <= scroll.sw + 1, '页面无横向溢出',
       `scrollWidth=${scroll.sh} clientWidth=${scroll.sw}`);
 
+    // ---- 12.6) 按住开火键时，另一根手指仍能转视角 ----
+    const yaw0 = await page.evaluate(() => window.__bb?.session?.debugYaw ?? null);
+    ok(yaw0 !== null, '可读到游戏内部朝向（调试钩子可用）');
+
+    if (yaw0 !== null) {
+      // 用 CDP 派发真实的触摸序列：手指 A 按住开火键，手指 B 在空白处滑动
+      const cdp = await page.context().newCDPSession(page);
+      const dispatch = (type, x, y, id) => cdp.send('Input.dispatchTouchEvent', {
+        type,
+        touchPoints: id === null ? [] : [{ x, y, id, radiusX: 12, radiusY: 12, force: 1 }],
+      });
+
+      await dispatch('touchStart', fb.x + fb.width / 2, fb.y + fb.height / 2, 1);
+      await page.waitForTimeout(120);
+      // 第二根手指：屏幕中上空白处
+      await dispatch('touchStart', 640, 180, 2);
+      for (let i = 1; i <= 8; i++) {
+        await dispatch('touchMove', 640 + i * 22, 180, 2);
+        await page.waitForTimeout(30);
+      }
+      await page.waitForTimeout(120);
+      const yaw1 = await page.evaluate(() => window.__bb?.session?.debugYaw ?? null);
+      await dispatch('touchEnd', 640 + 8 * 22, 180, 2);
+      await dispatch('touchEnd', fb.x + fb.width / 2, fb.y + fb.height / 2, 1);
+      await page.waitForTimeout(120);
+
+      ok(yaw1 !== null && Math.abs(yaw1 - yaw0) > 0.05,
+        '★ 按住开火键时另一根手指仍能转视角',
+        `yaw ${yaw0?.toFixed(3)} -> ${yaw1?.toFixed(3)}`);
+    }
+
+    // ---- 12.7) 摇杆滑动【不应】转动视角 ----
+    const yawA = await page.evaluate(() => window.__bb?.session?.debugYaw ?? null);
+    const stick = page.locator('#touch .ctrl.stick');
+    const sb = await stick.boundingBox();
+    if (sb && yawA !== null) {
+      const cdp = await page.context().newCDPSession(page);
+      const dispatch = (type, x, y, id) => cdp.send('Input.dispatchTouchEvent', {
+        type,
+        touchPoints: [{ x, y, id, radiusX: 12, radiusY: 12, force: 1 }],
+      });
+      await dispatch('touchStart', sb.x + sb.width / 2, sb.y + sb.height / 2, 3);
+      for (let i = 1; i <= 8; i++) {
+        await dispatch('touchMove', sb.x + sb.width / 2 + i * 8, sb.y + sb.height / 2, 3);
+        await page.waitForTimeout(25);
+      }
+      const yawB = await page.evaluate(() => window.__bb?.session?.debugYaw ?? null);
+      await dispatch('touchEnd', sb.x + sb.width / 2 + 64, sb.y + sb.height / 2, 3);
+      await page.waitForTimeout(100);
+      ok(yawB !== null && Math.abs(yawB - yawA) < 0.02,
+        '★ 滑动摇杆只走路，不会把视角带着转',
+        `yaw ${yawA?.toFixed(3)} -> ${yawB?.toFixed(3)}`);
+    }
+
+    // ---- 12.8) 玩家走不出地图边界 ----
+    const pos = await page.evaluate(() => {
+      const p = window.__bb?.session?.debugPos;
+      return p ? { x: p.x, z: p.z } : null;
+    });
+    ok(pos && Math.abs(pos.x) <= 30 && Math.abs(pos.z) <= 30,
+      '玩家在地图范围内', pos ? `(${pos.x.toFixed(1)}, ${pos.z.toFixed(1)})` : '');
+
     // ---- 13) FPS 显示 ----
     const fpsTxt = await page.locator('#hud .stat').textContent();
     ok(/FPS\s*\d+/.test(fpsTxt), '左上角显示 FPS', fpsTxt);

@@ -59,7 +59,10 @@ export function buildWorld(scene: THREE.Scene): void {
   plat.castShadow = true;
   plat.receiveShadow = true;
   scene.add(plat);
-  OBSTACLES.push({ pos: { x: 0, y: 0, z: 0 }, r: PLATFORM_R, h: PLATFORM_H });
+  // ★ 高台【不】加进 OBSTACLES。
+  //   四面都是斜坡，地面高度已由 groundHeight() 连续给出；
+  //   若把它当实心圆柱，玩家会在坡底被侧面挡住，永远走不上台。
+  //   （这一条由 tests/collide.test.ts 的"走上斜坡能登顶"守着）
 
   // ---- 四面斜坡（外低内高）----
   for (let i = 0; i < 4; i++) {
