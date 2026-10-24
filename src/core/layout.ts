@@ -143,3 +143,39 @@ export function clampCenter(cfg: ControlCfg): ControlCfg {
     y: Math.min(0.96, Math.max(0.04, cfg.y)),
   };
 }
+
+/**
+ * ★ 按【控件自身尺寸】夹取，保证整个控件都在屏幕内。
+ *
+ * clampCenter 只夹中心点的比例，对摇杆这种大控件不够用：
+ * 中心在 0.93 时控件下缘已经出屏，表现出来的就是"摇杆半个看不见"。
+ * 这里用控件在基准分辨率下的占比反推允许的边界。
+ */
+export function clampControl(key: ControlKey, cfg: ControlCfg): ControlCfg {
+  const [bw, bh] = BASE_SIZE[key];
+  const w = (bw * cfg.s) / BASE_W;
+  const h = (bh * cfg.s) / BASE_H;
+  const hw = w / 2;
+  const hh = h / 2;
+  const m = 0.01;                       // 贴边留 1%
+  const loX = hw + m;
+  const hiX = 1 - hw - m;
+  const loY = hh + m;
+  const hiY = 1 - hh - m;
+  return {
+    ...cfg,
+    x: loX >= hiX ? 0.5 : Math.min(hiX, Math.max(loX, cfg.x)),
+    y: loY >= hiY ? 0.5 : Math.min(hiY, Math.max(loY, cfg.y)),
+  };
+}
+
+/** 控件矩形是否完整落在屏幕内（用于自检与测试） */
+export function insideScreen(key: ControlKey, cfg: ControlCfg): boolean {
+  const [bw, bh] = BASE_SIZE[key];
+  const cx = cfg.x * BASE_W;
+  const cy = cfg.y * BASE_H;
+  const w = bw * cfg.s;
+  const h = bh * cfg.s;
+  return cx - w / 2 >= -0.5 && cy - h / 2 >= -0.5
+    && cx + w / 2 <= BASE_W + 0.5 && cy + h / 2 <= BASE_H + 0.5;
+}

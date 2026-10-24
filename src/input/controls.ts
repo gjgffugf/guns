@@ -1,6 +1,6 @@
 import { el } from '../ui/dom';
 import {
-  CONTROL_KEYS, CONTROL_NAMES, rectOf, hitTest, clampCenter,
+  CONTROL_KEYS, CONTROL_NAMES, rectOf, hitTest, clampCenter, defaultControls,
   type ControlKey, type ControlCfg,
 } from '../core/layout';
 
@@ -51,6 +51,11 @@ export class TouchControls {
   private last = new Map<number, { x: number; y: number }>();
   /** 正在转视角的手指 */
   private looking = new Set<number>();
+  /** 摇杆头元素 */
+  private thumb: HTMLElement | null = null;
+  /** 摇杆当前归一化偏移（用于绘制） */
+  private stickNX = 0;
+  private stickNY = 0;
 
   constructor(
     parent: HTMLElement,
@@ -68,12 +73,29 @@ export class TouchControls {
     parent.append(this.root);
 
     for (const k of CONTROL_KEYS) {
-      const n = el('div', { class: `ctrl ${k}`, text: CONTROL_NAMES[k] });
+      const n = el('div', { class: `ctrl ${k}` });
       n.style.position = 'absolute';
       n.style.pointerEvents = 'auto';
+      // ★ 关掉浏览器手势：不设 touch-action，手指一动就会被判成滚动
+      //   并发出 pointercancel，拖动/摇杆会中途断掉。
+      n.style.touchAction = 'none';
+
+      if (k === 'stick') {
+        // 摇杆做成真实图形：外圈底座 + 会跟着手指跑的摇杆头
+        const base = el('div', { class: 'stick-base' });
+        const thumb = el('div', { class: 'stick-thumb' });
+        const label = el('div', { class: 'ctrl-label', text: CONTROL_NAMES[k] });
+        n.append(base, thumb, label);
+        this.thumb = thumb;
+      } else {
+        n.append(el('div', { class: 'ctrl-label', text: CONTROL_NAMES[k] }));
+      }
       this.nodes.set(k, n);
       this.root.append(n);
     }
+
+    // 记录各控件基准尺寸，用于摇杆头归位
+    this.relayout();
 
     // 指针事件挂在 window 上：手指滑出控件范围也能继续收到 move/up，
     // 这样"长按开火后滑动瞄准"才成立。
@@ -97,15 +119,41 @@ export class TouchControls {
     for (const k of CONTROL_KEYS) {
       const n = this.nodes.get(k);
       if (!n) continue;
-      const r = rectOf(k, this.cfg[k], w, h);
+      // 配置缺失时（存档损坏 / 旧版本残留）退回默认，不要崩
+      const cfg = this.cfg?.[k] ?? defaultControls()[k];
+      if (!cfg) continue;
+      const r = rectOf(k, cfg, w, h);
       n.style.left = `${r.x}px`;
       n.style.top = `${r.y}px`;
       n.style.width = `${r.w}px`;
       n.style.height = `${r.h}px`;
-      n.style.opacity = String(this.cfg[k].a);
-      // 摇杆用横椭圆更顺手；其余保持圆形
-      n.style.borderRadius = k === 'stick' ? '50%' : '50%';
+      n.style.opacity = String(cfg.a);
     }
+    this.drawStick();
+  }
+
+  /** 把摇杆头画到当前偏移处（限制在底座半径内） */
+  private drawStick(): void {
+    const n = this.nodes.get('stick');
+    if (!n || !this.thumb) return;
+    const cfg = this.cfg?.stick ?? defaultControls().stick;
+    const r = rectOf('stick', cfg, window.innerWidth, window.innerHeight);
+    // 摇杆头行程 = 底座半径的 38%
+    const travel = Math.min(r.w, r.h) * 0.38;
+    const t = this.thumb;
+    const size = Math.min(r.w, r.h) * 0.34;
+    t.style.width = `${size}px`;
+    t.style.height = `${size}px`;
+    t.style.left = `calc(50% + ${this.stickNX * travel}px - ${size / 2}px)`;
+    t.style.top = `calc(50% + ${this.stickNY * travel}px - ${size / 2}px)`;
+    t.classList.toggle('active', this.stickNX !== 0 || this.stickNY !== 0);
+  }
+
+  /** 供外部同步摇杆显示（例如松手归零） */
+  setStickVisual(nx: number, ny: number): void {
+    this.stickNX = Math.max(-1, Math.min(1, nx));
+    this.stickNY = Math.max(-1, Math.min(1, ny));
+    this.drawStick();
   }
 
   private down = (ev: PointerEvent): void => {

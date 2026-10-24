@@ -3,7 +3,7 @@ import {
   FPS_OPTIONS, type Settings, type FpsOption,
 } from '../core/settings';
 import {
-  CONTROL_KEYS, CONTROL_NAMES, clampCenter, rectOf,
+  CONTROL_KEYS, CONTROL_NAMES, clampControl, rectOf, defaultControls,
   type ControlKey, type ControlCfg,
 } from '../core/layout';
 
@@ -35,6 +35,13 @@ export class SettingsPanel {
   private sizeSlider: HTMLInputElement | null = null;
   private alphaSlider: HTMLInputElement | null = null;
   private tipEl: HTMLElement | null = null;
+  /** 控件拖动状态（挂在 window 上，避免手指滑出元素后丢失事件） */
+  private drag: {
+    key: ControlKey; pointerId: number;
+    startX: number; startY: number;
+    baseX: number; baseY: number;
+    cw: number; ch: number;
+  } | null = null;
 
   constructor(parent: HTMLElement, s: Settings, h: SettingsHandlers) {
     this.s = s;
@@ -55,8 +62,37 @@ export class SettingsPanel {
     panel.append(tabCol, this.body);
     this.node.append(panel);
     parent.append(this.node);
+
+    // 拖动全程在 window 上接收：手指移出代理元素也照样跟手
+    window.addEventListener('pointermove', this.onDragMove, { passive: false });
+    window.addEventListener('pointerup', this.onDragEnd);
+    window.addEventListener('pointercancel', this.onDragEnd);
+
     this.select(0);
   }
+
+  private onDragMove = (ev: PointerEvent): void => {
+    const d = this.drag;
+    if (!d || ev.pointerId !== d.pointerId) return;
+    ev.preventDefault();
+    // 用【起始点 → 当前点】的绝对位移，而不是逐帧累加增量
+    const dx = ev.clientX - d.startX;
+    const dy = ev.clientY - d.startY;
+    this.s.controls[d.key] = clampControl(d.key, {
+      ...this.s.controls[d.key],
+      x: d.baseX + dx / d.cw,
+      y: d.baseY + dy / d.ch,
+    });
+    this.placeProxy(d.key);
+  };
+
+  private onDragEnd = (ev: PointerEvent): void => {
+    const d = this.drag;
+    if (!d || ev.pointerId !== d.pointerId) return;
+    this.drag = null;
+    this.proxies.get(d.key)?.classList.remove('dragging');
+    this.commit();
+  };
 
   setSettings(s: Settings): void { this.s = s; this.render(); }
   open(): void { show(this.node, true); this.render(); }
@@ -298,9 +334,15 @@ export class SettingsPanel {
     acts.append(
       btn('保存', 'btn primary', () => { this.commit(); this.toast('已保存'); }),
       btn('复位', 'btn', () => {
-        this.h.onChange({ ...this.s, controls: undefined as never });
-        this.toast('已复位（重新打开生效）');
-        this.render();
+        // ★ 原来是塞 undefined 让它"重新打开生效"，
+        //   结果如果直接进游戏，TouchControls 会因读不到配置而崩溃。
+        //   改成立刻写回默认值并重建代理，所见即所得。
+        this.s.controls = defaultControls();
+        this.selected = null;
+        this.commit();
+        this.buildProxies();
+        this.syncSliders();
+        this.toast('已恢复默认布局');
       }),
     );
 
@@ -318,45 +360,42 @@ export class SettingsPanel {
     clear(this.editCanvas);
     this.proxies.clear();
     const cv = this.editCanvas;
-    const w = cv.clientWidth || 900;
-    const h = cv.clientHeight || 340;
+    void cv;
 
     for (const k of CONTROL_KEYS) {
       const p = el('div', { class: 'proxy', text: CONTROL_NAMES[k] });
       this.proxies.set(k, p);
       cv.append(p);
 
-      let dragging = false;
-      let ox = 0;
-      let oy = 0;
+      // ★ 拖动之前的实现有 bug：只能挪一小段就停。
+      //   原因有两个：
+      //   1) 监听挂在代理元素自己身上，手指稍快就会滑出元素范围，
+      //      后续 pointermove 收不到（setPointerCapture 也不总能兜住）；
+      //   2) 缺 touch-action:none，浏览器把手势判成滚动并发出 pointercancel。
+      //   改成：按下时记【起始点 + 起始配置】，在 window 上监听，
+      //   用绝对位移算新位置 —— 不累积误差，也不依赖元素是否还被命中。
       const down = (ev: PointerEvent): void => {
         ev.preventDefault();
         ev.stopPropagation();
         this.selected = k;
-        dragging = true;
-        ox = ev.clientX;
-        oy = ev.clientY;
-        (ev.target as HTMLElement).setPointerCapture?.(ev.pointerId);
+        const cv = this.editCanvas;
+        if (!cv) return;
+        const box = cv.getBoundingClientRect();
+        this.drag = {
+          key: k,
+          pointerId: ev.pointerId,
+          startX: ev.clientX,
+          startY: ev.clientY,
+          baseX: this.s.controls[k].x,
+          baseY: this.s.controls[k].y,
+          cw: box.width || 900,
+          ch: box.height || 340,
+        };
         this.syncSliders();
         this.highlight();
+        p.classList.add('dragging');
       };
-      const move = (ev: PointerEvent): void => {
-        if (!dragging) return;
-        ev.preventDefault();
-        const dx = ev.clientX - ox;
-        const dy = ev.clientY - oy;
-        ox = ev.clientX;
-        oy = ev.clientY;
-        const cur = this.s.controls[k];
-        this.s.controls[k] = clampCenter({ ...cur, x: cur.x + dx / w, y: cur.y + dy / h });
-        this.placeProxy(k);
-        this.commit();
-      };
-      const up = (): void => { dragging = false; };
       p.addEventListener('pointerdown', down);
-      p.addEventListener('pointermove', move);
-      p.addEventListener('pointerup', up);
-      p.addEventListener('pointercancel', up);
       this.placeProxy(k);
     }
     this.highlight();
@@ -365,8 +404,10 @@ export class SettingsPanel {
   private placeProxy(k: ControlKey): void {
     const p = this.proxies.get(k);
     if (!p || !this.editCanvas) return;
+    // 实时取尺寸：面板刚打开时布局可能还没完成，用缓存值会算歪
     const w = this.editCanvas.clientWidth || 900;
     const h = this.editCanvas.clientHeight || 340;
+    p.style.touchAction = 'none';
     const cfg: ControlCfg = this.s.controls[k];
     const r = rectOf(k, cfg, w, h);
     p.style.left = `${r.x}px`;

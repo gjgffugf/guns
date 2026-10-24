@@ -61,6 +61,68 @@ export function raycastTarget(origin: V3, dir: V3, t: Target, maxDist: number): 
   return { hit: true, distance: s, head: yHit >= headZone };
 }
 
+/**
+ * 射线 vs 竖直圆柱（障碍物）：返回射线撞到圆柱面的最近距离。
+ * 没有撞到则返回 Infinity。
+ *
+ * ★ 这是"子弹不穿墙"的核心。只判断"目标中心能不能看见"是不够的：
+ *   必须算出墙在射线上的距离，再和目标距离比较，
+ *   墙更近就说明子弹先打在墙上，目标不该掉血。
+ */
+export function rayBlockDistance(
+  origin: V3,
+  dir: V3,
+  blockers: Array<{ pos: V3; r: number; h: number }>,
+  maxDist: number,
+): number {
+  let best = Infinity;
+  const a = dir.x * dir.x + dir.z * dir.z;
+  if (a < 1e-9) return best;              // 垂直向上/下，不会撞到竖直圆柱侧面
+
+  for (const b of blockers) {
+    // e = 起点 - 圆心。解 |e + d*t|² = r²
+    //   a·t² + 2(e·d)t + (|e|² - r²) = 0
+    // 用 p = -(e·d)，根为 t = (p ± sqrt(p² - a·c)) / a
+    const ex = origin.x - b.pos.x;
+    const ez = origin.z - b.pos.z;
+    const bq = -(ex * dir.x + ez * dir.z);
+    const c = ex * ex + ez * ez - b.r * b.r;
+    const disc = bq * bq - a * c;
+    if (disc < 0) continue;
+
+    const sq = Math.sqrt(disc);
+    let t = (bq - sq) / a;                // 近端交点
+    if (t < 0) t = (bq + sq) / a;         // 起点在圆柱内部，取远端交点
+    if (t < 0 || t > maxDist) continue;
+
+    // 参数 s：沿 3D 单位方向的距离
+    const s3 = t / Math.sqrt(a);
+    const yAt = origin.y + dir.y * s3;
+    // 射线在该点已经高过障碍物顶部 —— 从它上方飞过，不算挡住
+    if (yAt > b.h) continue;
+    // 射线在该点低于地面 —— 打在地上，不算被这面墙挡（由地面处理）
+    if (yAt < 0) continue;
+
+    if (s3 < best) best = s3;
+  }
+  return best;
+}
+
+/** 射线打到的墙（用于弹着点火花）；没有则返回 null */
+export function rayHitWall(
+  origin: V3,
+  dir: V3,
+  blockers: Array<{ pos: V3; r: number; h: number }>,
+  maxDist: number,
+): { point: V3; distance: number } | null {
+  const d = rayBlockDistance(origin, dir, blockers, maxDist);
+  if (!Number.isFinite(d)) return null;
+  return {
+    point: { x: origin.x + dir.x * d, y: origin.y + dir.y * d, z: origin.z + dir.z * d },
+    distance: d,
+  };
+}
+
 /** 视线检测：是否被高度大于 obstacleH 的障碍挡住（简化：只判断目标是否可见） */
 export function hasLineOfSight(from: V3, to: V3, blockers: Array<{ pos: V3; r: number; h: number }>): boolean {
   for (const b of blockers) {

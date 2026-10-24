@@ -11,10 +11,15 @@ import {
 } from './weapon';
 import { createBot, stepBot, hurtBot, safeSpawn } from './bot';
 import { applyLook } from './aim';
-import { eyePos, dirFrom, pickTarget, hasLineOfSight } from './combat';
+import { eyePos, dirFrom, pickTarget, rayBlockDistance, rayHitWall } from './combat';
 import type { Settings } from '../core/settings';
 import type { V3 } from '../core/vec';
 import { sfx } from '../core/sfx';
+import {
+  createHeal, beginUse, tickHeal, cancelUse, applyHeal, isBusy, canUse,
+  HEAL_DEFS, HEAL_ORDER, speedMul, takenMul, dealtMul,
+  type HealState, type HealKind,
+} from './heal';
 import type { StepWorld } from './player';
 
 /** 单人对局：玩家 + 1 名战术人机，先到 10 分获胜，10 分钟倒计时 */
@@ -33,6 +38,18 @@ export interface SessionUI {
   setCenter(t: string): void;
   pushKill(m: string): void;
   setAds(on: boolean): void;
+  /** 命中反馈（head=爆头） */
+  onHit(head: boolean): void;
+  /** 枪口闪光 */
+  onMuzzle(): void;
+  /** 受伤红闪 */
+  onHurt(): void;
+  /** 治疗物状态变化 */
+  onHealChange(h: HealState): void;
+  /** 使用中的倒计时文本；空表示隐藏 */
+  setHealTimer(t: string): void;
+  /** 显示 / 隐藏"取消"按钮 */
+  setCancel(on: boolean, cb?: () => void): void;
 }
 
 /** 角色圆柱半径（碰撞用） */
@@ -58,6 +75,11 @@ export class SoloSession {
   };
   private wantFire = false;
   private ads = false;
+  /** 治疗物 */
+  private heal: HealState = createHeal();
+  private healListOpen = false;
+  /** 使用后坐力（视觉俯仰抖动） */
+  private recoil = 0;
   private respawnLeft = 0;
 
   private scoreSelf = 0;
@@ -158,6 +180,11 @@ export class SoloSession {
 
   /** 调试/测试用：当前朝向 */
   get debugYaw(): number { return this.p.yaw; }
+  get debugHp(): number { return this.p.hp; }
+  /** 使用治疗物期间不能开枪 */
+  get debugCannotFire(): boolean { return isBusy(this.heal); }
+  /** 仅测试用：直接设置血量 */
+  setHpForTest(v: number): void { this.p = { ...this.p, hp: Math.max(1, Math.min(this.p.maxHp, v)) }; }
   get debugPitch(): number { return this.pitch; }
   get debugPos(): V3 { return this.p.pos; }
 
@@ -260,22 +287,48 @@ export class SoloSession {
     // ★ 传入世界信息：碰撞 + 地面高度都在 step 内部完成，
     //   所以不会出现"走出场外"或"穿墙"。
     const wasGrounded = this.p.grounded;
-    this.p = step(this.p, this.input, dt, DEFAULT_TUNING, this.stepWorld());
+    // 能量饮料的移速加成
+    const tun = speedMul(this.heal.buff) !== 1
+      ? { ...DEFAULT_TUNING,
+          walkSpeed: DEFAULT_TUNING.walkSpeed * speedMul(this.heal.buff),
+          sprintSpeed: DEFAULT_TUNING.sprintSpeed * speedMul(this.heal.buff) }
+      : DEFAULT_TUNING;
+    this.p = step(this.p, this.input, dt, tun, this.stepWorld());
     this.input.jumpPressed = false;
     if (!wasGrounded && this.p.grounded) sfx.land();
+
+    // ---- 治疗物 ----
+    this.tickHealState(dt);
 
     // ---- 武器 ----
     this.weapon = stepWeapon(this.weapon, dt);
     if (this.wantFire) {
+      // 正在用治疗物 → 不能开枪
+      if (isBusy(this.heal)) {
+        this.wantFire = false;
+      } else {
       const r = tryFire(this.weapon);
       if (r.fired) {
         this.weapon = r.weapon;
         sfx.shoot(this.weapon.kind === 'melee');
-        this.shoot(r.damage);
+        this.ui.onMuzzle();
+        this.recoil = Math.min(0.06, this.recoil + 0.012);
+        this.shoot(r.damage * dealtMul(this.heal.buff));
       } else if (r.reason === 'empty') {
-        this.ui.setTip('弹匣已空 · 点击换弹');
-        sfx.dryFire();
+        // ★ 打空自动换弹（有备弹就直接换，没有才提示）
+        if (this.weapon.reserve > 0 && !isReloading(this.weapon)) {
+          const rl = tryReload(this.weapon);
+          if (rl.ok) {
+            this.weapon = rl.weapon;
+            sfx.reload();
+            this.ui.setTip('弹匣已空 · 自动换弹');
+          }
+        } else if (this.weapon.reserve <= 0) {
+          this.ui.setTip('没有备用弹药');
+          sfx.dryFire();
+        }
         this.wantFire = false;
+      }
       }
     }
 
@@ -303,10 +356,14 @@ export class SoloSession {
       this.ui.setTip('');
     }
 
+    // ---- 后坐力衰减 ----
+    this.recoil = Math.max(0, this.recoil - dt * 0.28);
+
     // ---- 相机 ----
     const eye = eyePos(this.p);
+    if (this.recoil > 0) eye.y += 0;   // 只做俯仰抖动，不改眼位
     this.camera.position.set(eye.x, eye.y, eye.z);
-    const d = dirFrom(this.p.yaw, this.pitch);
+    const d = dirFrom(this.p.yaw, this.pitch + this.recoil);
     this.camera.lookAt(eye.x + d.x, eye.y + d.y, eye.z + d.z);
     this.camera.fov = this.ads ? 38 : 75;
     this.camera.updateProjectionMatrix();
@@ -329,8 +386,9 @@ export class SoloSession {
         heightAt: groundHeight,
       }, dt, DEFAULT_TUNING);
       if (r.hitPlayer && this.p.alive) {
-        this.p = damage(this.p, 9);
+        this.p = damage(this.p, 9 * takenMul(this.heal.buff));
         sfx.hurt();
+        this.ui.onHurt();
         if (!this.p.alive) this.onPlayerDown();
       }
       this.bots.set(id, r.bot);
@@ -345,6 +403,72 @@ export class SoloSession {
     }
   }
 
+  // ---------------- 治疗物 ----------------
+  private tickHealState(dt: number): void {
+    const r = tickHeal(this.heal, dt, this.p.hp, this.p.maxHp);
+    this.heal = r.state;
+    if (r.finished) {
+      const d = HEAL_DEFS[r.finished];
+      const before = this.p.hp;
+      this.p = { ...this.p, hp: applyHeal(this.p.hp, this.p.maxHp, r.healAmount, r.full) };
+      const gain = Math.round(this.p.hp - before);
+      this.ui.setCenter('');
+      this.ui.setCancel(false);
+      this.ui.setTip(d.buff > 0 ? `${d.name} · 状态提升 15s` : `恢复 ${gain} 点`);
+      this.pushHeal();
+    } else if (this.heal.using) {
+      this.ui.setCenter(`${HEAL_DEFS[this.heal.using].name}\n${this.heal.left.toFixed(1)}s`);
+      this.ui.setCancel(true);
+    } else {
+      this.ui.setHealTimer('');
+    }
+  }
+
+  private pushHeal(): void { this.ui.onHealChange(this.heal); }
+
+  /** 使用当前选中的治疗物 */
+  useHeal(): void {
+    if (this.healListOpen) return;
+    const k = this.heal.picked;
+    if (this.heal.inv[k] <= 0) { this.ui.setTip(`${HEAL_DEFS[k].name} 已用完`); return; }
+    if (!canUse(this.heal, k, this.p.hp, this.p.maxHp)) {
+      if (this.p.hp >= this.p.maxHp && k !== 'energy') this.ui.setTip('已满血');
+      return;
+    }
+    this.heal = beginUse(this.heal, k, this.p.hp, this.p.maxHp);
+    this.wantFire = false;
+    this.ui.setCancel(true, () => this.cancelHeal());
+    this.pushHeal();
+  }
+
+  /** 选中物品（展开列表里点击） */
+  pickHeal(k: HealKind): void {
+    if (isBusy(this.heal)) return;
+    this.heal = { ...this.heal, picked: k };
+    this.healListOpen = false;
+    this.pushHeal();
+  }
+
+  toggleHealList(): void {
+    if (isBusy(this.heal)) return;
+    this.healListOpen = !this.healListOpen;
+    this.pushHeal();
+  }
+
+  cancelHeal(): void {
+    this.heal = cancelUse(this.heal);
+    this.ui.setCenter('');
+    this.ui.setCancel(false);
+    this.ui.setTip('已取消');
+    this.pushHeal();
+  }
+
+  /** 供 HUD 渲染列表 */
+  get healState(): HealState { return this.heal; }
+  get healOpen(): boolean { return this.healListOpen; }
+  get healOrder(): HealKind[] { return HEAL_ORDER; }
+  get buffLeft(): number { return this.heal.buff.left; }
+
   private shoot(dmg: number): void {
     const origin = eyePos(this.p);
     const dir = dirFrom(this.p.yaw, this.pitch);
@@ -357,14 +481,23 @@ export class SoloSession {
       }));
 
     const pick = pickTarget(origin, dir, targets, d.range);
-    if (!pick) return;
-    // 视线遮挡
-    if (!hasLineOfSight(origin, this.bots.get(pick.id)!.state.pos, OBSTACLES)) return;
+
+    // ★ 子弹不穿墙：先算出射线撞墙的距离。
+    //   墙比目标更近 → 子弹先打在墙上，目标不掉血。
+    const wallDist = rayBlockDistance(origin, dir, OBSTACLES, d.range);
+    const wall = rayHitWall(origin, dir, OBSTACLES, d.range);
+
+    if (!pick || pick.distance > wallDist) {
+      // 打在墙上 / 地上：给出弹着点反馈，但目标不掉血
+      if (wall) this.ui.onHit(false);
+      return;
+    }
 
     const mul = pick.head ? 1.6 : 1;
     const b = this.bots.get(pick.id)!;
     const hurt = hurtBot(b, dmg * mul);
     this.bots.set(pick.id, hurt);
+    this.ui.onHit(pick.head);
     if (!hurt.state.alive) {
       this.scoreSelf += 1;
       sfx.kill();
@@ -383,6 +516,8 @@ export class SoloSession {
 
   private respawn(): void {
     const p0 = safeSpawn(spawnPoints(), OBSTACLES, BODY_R);
+    this.heal = cancelUse(this.heal);
+    this.healListOpen = false;
     this.p = createPlayer(p0);
     this.weapon = refill(createWeapon('ranged', 150), 150);
     this.ui.setNotice('');

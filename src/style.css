@@ -192,6 +192,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 #hud .center-timer { position: absolute; left: 50%; top: 34%; transform: translate(-50%,-50%);
   font-size: 44px; color: #8effa8; text-shadow: 0 3px 12px #000; }
 #hud .cancel { position: absolute; left: 50%; top: 48%; transform: translateX(-50%);
+  pointer-events: auto;
   pointer-events: auto; padding: 12px 30px; font-size: 20px; border-radius: 12px;
   background: rgba(90,30,28,.92); border: 2px solid rgba(255,255,255,.5); }
 
@@ -216,3 +217,140 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 
 /* 触摸控件层铺满，控件坐标与触摸事件同为 CSS 像素 */
 #touch { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+
+
+/* ---------------- 触摸控件（图形化）---------------- */
+#touch .ctrl {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.42);
+  background: rgba(20,24,34,.42);
+  color: #e9eef8;
+  font-size: 15px;
+  text-shadow: 0 2px 6px #000;
+  user-select: none;
+  -webkit-user-select: none;
+}
+#touch .ctrl.active { background: rgba(120,140,190,.6); border-color: rgba(255,255,255,.85); }
+#touch .ctrl-label { pointer-events: none; text-align: center; line-height: 1.05; padding: 2px; }
+#touch .ctrl.fire { border-color: rgba(255,120,110,.7); background: rgba(120,26,26,.4); }
+#touch .ctrl.heal { border-color: rgba(110,220,150,.7); background: rgba(20,90,50,.4); }
+
+/* 摇杆：底座 + 摇杆头 */
+#touch .ctrl.stick { background: rgba(18,22,32,.3); }
+#touch .stick-base {
+  position: absolute; left: 8%; top: 8%; width: 84%; height: 84%;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.3);
+  background: radial-gradient(circle, rgba(255,255,255,.09), rgba(255,255,255,.02));
+}
+#touch .stick-thumb {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, rgba(255,255,255,.95), rgba(150,170,210,.75));
+  border: 2px solid rgba(255,255,255,.9);
+  box-shadow: 0 3px 10px rgba(0,0,0,.5);
+  transition: left .04s linear, top .04s linear;
+}
+
+/* ---------------- 射击 / 受击反馈 ---------------- */
+.hitmark {
+  position: absolute; left: 50%; top: 50%;
+  width: 34px; height: 34px; margin: -17px 0 0 -17px;
+  pointer-events: none;
+}
+.hitmark::before, .hitmark::after {
+  content: ''; position: absolute; left: 50%; top: 50%;
+  width: 26px; height: 3px; margin: -1.5px 0 0 -13px;
+  background: #fff; box-shadow: 0 0 4px #000;
+}
+.hitmark::before { transform: rotate(45deg); }
+.hitmark::after { transform: rotate(-45deg); }
+.hitmark.head::before, .hitmark.head::after { background: #ff4444; }
+.hitmark.pop { animation: hitpop .18s ease-out; }
+@keyframes hitpop {
+  from { transform: scale(1.6); opacity: 1; }
+  to   { transform: scale(1);   opacity: .9; }
+}
+
+.hurt-flash {
+  position: absolute; inset: 0; pointer-events: none; opacity: 0;
+  box-shadow: inset 0 0 90px 30px rgba(210,30,30,.85);
+  transition: opacity .25s;
+}
+.hurt-flash.on { opacity: 1; transition: opacity .03s; }
+
+.muzzle {
+  position: absolute; right: 12%; bottom: 14%;
+  width: 90px; height: 90px; margin: -45px;
+  border-radius: 50%; pointer-events: none; opacity: 0;
+  background: radial-gradient(circle, rgba(255,220,120,.9), rgba(255,150,40,0) 70%);
+}
+.muzzle.on { opacity: 1; }
+
+/* ---------------- 治疗物 ---------------- */
+.healwrap {
+  position: absolute;
+  left: 50%; bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  /* ★ HUD 整层是 pointer-events:none（否则会挡住转视角），
+     所以每个真正要点的控件都必须显式打开 auto。
+     少了这行，点击会被底下的 canvas 吃掉 —— 表现就是"治疗物点了没反应"。 */
+  pointer-events: auto;
+}
+.healwrap * { pointer-events: auto; }
+.heal-main {
+  width: 76px; height: 76px; border-radius: 50%;
+  border: 2px solid rgba(120,255,180,.7);
+  background: rgba(16,60,36,.72);
+  color: #dfffe9; font-size: 13px; line-height: 1.25; text-align: center;
+  white-space: pre-line;
+}
+.heal-main.empty { opacity: .45; border-color: rgba(255,255,255,.3); }
+.heal-arrow {
+  width: 40px; height: 22px; border-radius: 8px 8px 0 0;
+  border: 2px solid rgba(120,255,180,.6);
+  background: rgba(16,60,36,.8); color: #dfffe9; font-size: 12px;
+}
+.heallist {
+  display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px;
+}
+.heal-item {
+  display: flex; justify-content: space-between; gap: 12px;
+  min-width: 168px; padding: 7px 12px; border-radius: 10px;
+  border: 2px solid rgba(255,255,255,.35);
+  background: rgba(14,18,26,.94); color: #e9eef8; font-size: 14px;
+}
+.heal-item.on { border-color: rgba(120,255,180,.9); background: rgba(20,70,44,.95); }
+.heal-item.empty { opacity: .45; }
+.heal-item .hc { color: #9fb0cc; }
+
+/* ---------------- 控件编辑：拖动 ---------------- */
+#settings .canvas {
+  position: relative;
+  flex: 1; min-height: 300px;
+  border: 2px dashed rgba(255,255,255,.22);
+  border-radius: 12px; overflow: hidden;
+  /* ★ 没有这行，手指一移浏览器就当成滚动并发出 pointercancel，
+     拖动只能挪一小段就断 */
+  touch-action: none;
+}
+#settings .proxy {
+  position: absolute;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.45);
+  background: rgba(40,48,70,.85);
+  color: #e9eef8; font-size: 13px; text-align: center;
+  cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none; user-select: none;
+}
+#settings .proxy.on {
+  border-color: #ff6b5a; background: rgba(120,36,36,.9);
+  box-shadow: 0 0 0 2px rgba(255,107,90,.35);
+}
+#settings .proxy.dragging { cursor: grabbing; opacity: .92; }

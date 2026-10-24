@@ -5,7 +5,17 @@ import type { Settings } from '../core/settings';
 
 export interface HudCallbacks {
   onExit: () => void;
+  /** 点击治疗圆形按钮：使用当前选中的物品 */
+  onHealUse: () => void;
+  /** 点击三角：展开 / 收起物品列表 */
+  onHealToggle: () => void;
+  /** 选中某个物品 */
+  onHealPick: (kind: HealKind) => void;
+  /** 取消使用 */
+  onHealCancel: () => void;
 }
+
+export type HealKind = 'bandage' | 'medkit' | 'energy';
 
 export class Hud {
   private node: HTMLElement;
@@ -22,6 +32,14 @@ export class Hud {
   private cancelBtn: HTMLButtonElement;
   private cross: HTMLElement;
   private scope: HTMLElement;
+  private healWrap: HTMLElement;
+  private healMain: HTMLButtonElement;
+  private healArrow: HTMLButtonElement;
+  private healList: HTMLElement;
+  private healCount: HTMLElement;
+  private hitMark: HTMLElement;
+  private flash: HTMLElement;
+  private muzzle: HTMLElement;
 
   constructor(parent: HTMLElement, cb: HudCallbacks, _s: Settings) {
     void _s;
@@ -57,9 +75,57 @@ export class Hud {
     this.cancelBtn = btn('取消', 'cancel', () => { /* 由外部绑定 */ });
     show(this.cancelBtn, false);
 
+    // ---- 射击反馈层 ----
+    this.hitMark = el('div', { class: 'hitmark' });
+    show(this.hitMark, false);
+    this.flash = el('div', { class: 'hurt-flash' });
+    this.muzzle = el('div', { class: 'muzzle' });
+
+    // ---- 治疗物：下方圆形 + 上方三角展开 ----
+    this.healWrap = el('div', { class: 'healwrap' });
+    this.healArrow = el('button', {
+      class: 'heal-arrow', type: 'button', text: '▲',
+    }) as HTMLButtonElement;
+    this.healArrow.addEventListener('click', () => cb.onHealToggle());
+    this.healList = el('div', { class: 'heallist hidden' });
+    this.healMain = el('button', { class: 'heal-main', type: 'button' }) as HTMLButtonElement;
+    this.healCount = el('div', { class: 'heal-count', text: '' });
+    this.healMain.addEventListener('click', () => cb.onHealUse());
+    this.healMain.append(this.healCount);
+    this.healWrap.append(this.healList, this.healArrow, this.healMain);
+
     this.node.append(this.stat, this.score, exit, this.cross, bottom,
-      this.notice, this.feed, this.center, this.cancelBtn);
+      this.notice, this.feed, this.center, this.cancelBtn,
+      this.hitMark, this.flash, this.muzzle, this.healWrap);
     parent.append(this.node);
+  }
+
+  // ---------------- 射击 / 受击反馈 ----------------
+  /** 命中标记（爆头为红色） */
+  showHit(head: boolean): void {
+    this.hitMark.classList.toggle('head', head);
+    show(this.hitMark, true);
+    this.hitMark.classList.remove('pop');
+    // 强制重排以重启动画
+    void this.hitMark.offsetWidth;
+    this.hitMark.classList.add('pop');
+    window.setTimeout(() => show(this.hitMark, false), 220);
+  }
+
+  /** 枪口闪光（屏幕右下角一闪） */
+  flashMuzzle(): void {
+    this.muzzle.classList.remove('on');
+    void this.muzzle.offsetWidth;
+    this.muzzle.classList.add('on');
+    window.setTimeout(() => this.muzzle.classList.remove('on'), 55);
+  }
+
+  /** 受伤：屏幕边框红闪 */
+  flashHurt(): void {
+    this.flash.classList.remove('on');
+    void this.flash.offsetWidth;
+    this.flash.classList.add('on');
+    window.setTimeout(() => this.flash.classList.remove('on'), 260);
   }
 
   open(): void { show(this.node, true); }
@@ -97,6 +163,36 @@ export class Hud {
       this.cancelBtn.replaceWith(n);
       this.cancelBtn = n;
     }
+  }
+
+  // ---------------- 治疗物 ----------------
+  setHealListOpen(on: boolean): void { show(this.healList, on); }
+
+  /** 物品列表：名称 + 数量 + 选中态 */
+  renderHealList(
+    items: Array<{ kind: HealKind; name: string; count: number }>,
+    picked: HealKind,
+    onPick: (k: HealKind) => void,
+  ): void {
+    const list = this.healList;
+    while (list.firstChild) list.removeChild(list.firstChild);
+    for (const it of items) {
+      const b = el('button', { class: 'heal-item', type: 'button' }) as HTMLButtonElement;
+      if (it.kind === picked) b.classList.add('on');
+      if (it.count <= 0) b.classList.add('empty');
+      b.append(
+        el('span', { class: 'hn', text: it.name }),
+        el('span', { class: 'hc', text: `x${it.count}` }),
+      );
+      b.addEventListener('click', () => onPick(it.kind));
+      list.append(b);
+    }
+  }
+
+  /** 圆形主按钮上的文字：选中的物品与数量 */
+  setHealMain(name: string, count: number): void {
+    this.healCount.textContent = count > 0 ? `${name}\nx${count}` : `${name}\n用完`;
+    this.healMain.classList.toggle('empty', count <= 0);
   }
 
   /** 准星：与设置页共用同一套参数 */

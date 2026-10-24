@@ -7,6 +7,7 @@ import { SettingsPanel } from './ui/settings';
 import { Hud } from './ui/hud';
 import { TouchControls, type CtrlEvent, type LookEvent } from './input/controls';
 import { SoloSession } from './game/session';
+import { HEAL_DEFS, type HealState } from './game/heal';
 import { load, save, defaultSettings, type Settings } from './core/settings';
 import { sfx } from './core/sfx';
 import type { ControlKey } from './core/layout';
@@ -111,6 +112,10 @@ async function startSolo(): Promise<void> {
   if (!hud) {
     hud = new Hud(app, {
       onExit: () => exitGame(),
+      onHealUse: () => session?.useHeal(),
+      onHealToggle: () => session?.toggleHealList(),
+      onHealPick: (k) => session?.pickHeal(k),
+      onHealCancel: () => session?.cancelHeal(),
     }, settings);
   }
   loading.setProgress(0.6);
@@ -127,6 +132,12 @@ async function startSolo(): Promise<void> {
     setCenter: (t) => hud?.setCenter(t),
     pushKill: (m) => hud?.pushKill(m),
     setAds: (on) => hud?.setAds(on),
+    setCancel: (on, cb) => hud?.setCancel(on, cb),
+    onHit: (head) => hud?.showHit(head),
+    onMuzzle: () => hud?.flashMuzzle(),
+    onHurt: () => hud?.flashHurt(),
+    onHealChange: (h) => syncHeal(h),
+    setHealTimer: () => { /* 倒计时走 setCenter */ },
   }, settings);
 
   loading.setProgress(1);
@@ -138,6 +149,7 @@ async function startSolo(): Promise<void> {
   hud.drawCrosshair(settings);
   session.start();
   bindControls();
+  syncHeal(session.healState);
   } catch (err) {
     // 任何一步出错都必须收起加载层并回到菜单，
     // 否则会卡在全屏不透明的加载页上，表现为"界面加载不出来"。
@@ -149,6 +161,19 @@ async function startSolo(): Promise<void> {
     menu.open();
     menu.toast('进入游戏失败，已返回主菜单');
   }
+}
+
+/** 同步治疗物 UI（主按钮文案 + 展开列表 + 选中态） */
+function syncHeal(h: HealState): void {
+  if (!hud || !session) return;
+  const items = session.healOrder.map((k) => ({
+    kind: k,
+    name: HEAL_DEFS[k].name,
+    count: h.inv[k],
+  }));
+  hud.setHealListOpen(session.healOpen);
+  hud.setHealMain(HEAL_DEFS[h.picked].name, h.inv[h.picked]);
+  hud.renderHealList(items, h.picked, (k) => session?.pickHeal(k));
 }
 
 function bindControls(): void {
@@ -170,6 +195,8 @@ function onCtrl(e: CtrlEvent): void {
     const cl = Math.min(1, len);
     const nx = len > 0 ? (e.nx / len) * cl : 0;
     const ny = len > 0 ? (e.ny / len) * cl : 0;
+    // ★ 摇杆头跟着手指动（松手归位）
+    controls?.setStickVisual(e.phase === 'up' ? 0 : nx, e.phase === 'up' ? 0 : ny);
     if (e.phase === 'up') session.setStick(0, 0);
     else session.setStick(nx, ny);
     return;
@@ -189,7 +216,7 @@ function onCtrl(e: CtrlEvent): void {
     case 'prone': session.setStance('prone'); break;
     case 'reload': session.reload(); break;
     case 'melee': session.toggleWeapon(); break;
-    case 'heal': session.setFire(false); break;
+    case 'heal': session.useHeal(); break;
     default: break;
   }
 }

@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert';
 import {
-  BASE_W, BASE_H, CONTROL_KEYS, defaultControls, uiScale, rectOf,
-  hitTest, sizeOf, pointInRect,
-  type ControlKey, type Rect,
+  uiScale, sizeOf, rectOf, hitTest, pointInRect, defaultControls,
+  clampControl, insideScreen,
+  BASE_SIZE, BASE_W, BASE_H, CONTROL_KEYS,
+  type Rect, type ControlKey,
 } from '../src/core/layout';
 
 /**
@@ -95,4 +96,51 @@ test('拖动后仍可命中（布局与命中共源）', () => {
   const hit: ControlKey | null = hitTest(c2, 1280, 720, r.x + r.w / 2, r.y + r.h / 2);
   assert.equal(hit, 'fire', '拖到中间后点中心仍应命中');
   assert.equal(hitTest(c2, 1280, 720, 40, 40), null, '原位置应已空出');
+});
+
+// ---------------- 控件夹取（含自身尺寸）----------------
+
+test('★ 夹取: 大控件（摇杆）拖到边角也不会出屏', () => {
+  const k: ControlKey = 'stick';
+  // 往下拖到 0.97 —— clampCenter 会放行，clampControl 必须拦住
+  const c = clampControl(k, { x: 0.5, y: 0.97, s: 1, a: 0.85 });
+  assert.ok(insideScreen(k, c),
+    `摇杆应完整在屏内，实际 y=${c.y.toFixed(3)}`);
+});
+
+test('夹取: 所有控件在四个角都完整可见', () => {
+  for (const k of CONTROL_KEYS) {
+    for (const [x, y] of [[0.02, 0.02], [0.98, 0.02], [0.02, 0.98], [0.98, 0.98]]) {
+      const c = clampControl(k, { x, y, s: 1, a: 0.9 });
+      assert.ok(insideScreen(k, c),
+        `${k} 在 (${x}, ${y}) 出屏了 -> (${c.x.toFixed(3)}, ${c.y.toFixed(3)})`);
+    }
+  }
+});
+
+test('夹取: 放大到 2 倍也不会出屏', () => {
+  for (const k of CONTROL_KEYS) {
+    const c = clampControl(k, { x: 0.99, y: 0.99, s: 2, a: 0.9 });
+    assert.ok(insideScreen(k, c), `${k} 在 2 倍尺寸下出屏`);
+  }
+});
+
+test('夹取: 不改动本来就在安全区的配置', () => {
+  const c = clampControl('fire', { x: 0.5, y: 0.5, s: 1, a: 0.9 });
+  assert.equal(c.x, 0.5);
+  assert.equal(c.y, 0.5);
+});
+
+test('夹取: 缩放倍率保留', () => {
+  const c = clampControl('fire', { x: 0.5, y: 0.5, s: 1.5, a: 0.7 });
+  assert.equal(c.s, 1.5);
+  assert.equal(c.a, 0.7);
+});
+
+test('夹取: 基准尺寸自洽（最大控件也不超过屏幕的 1/3 宽）', () => {
+  for (const k of CONTROL_KEYS) {
+    const [w, h] = BASE_SIZE[k];
+    assert.ok(w <= BASE_W / 3, `${k} 太宽 ${w}`);
+    assert.ok(h <= BASE_H / 1.5, `${k} 太高 ${h}`);
+  }
 });

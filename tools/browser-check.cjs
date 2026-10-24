@@ -103,6 +103,59 @@ const ok = (c, name, extra = '') => {
   const closed = await page.locator('#settings').evaluate((e) => e.classList.contains('hidden'));
   ok(closed, '设置面板可关闭');
 
+  // ---- 6.5) 控件编辑：一次拖动大段距离 ----
+  // 上一步把设置关掉了，这里重新打开再切到"控件"页
+  await page.locator('#menu .gear').click();
+  await page.waitForTimeout(300);
+  await page.locator('#settings .tabs button', { hasText: '控件' }).first().click();
+  await page.waitForTimeout(400);
+  const dragResult = await page.evaluate(async () => {
+    const cvs = document.querySelector('#settings .canvas');
+    const p = document.querySelector('#settings .proxy');
+    if (!cvs || !p) return null;
+    const before = { x: p.style.left, y: p.style.top };
+    const r = p.getBoundingClientRect();
+    const cx = r.x + r.width / 2;
+    const cy = r.y + r.height / 2;
+    const fire = (type, x, y) => p.dispatchEvent(new PointerEvent(type, {
+      bubbles: true, cancelable: true, pointerId: 11, pointerType: 'touch',
+      clientX: x, clientY: y,
+    }));
+    const fireWin = (type, x, y) => window.dispatchEvent(new PointerEvent(type, {
+      bubbles: true, cancelable: true, pointerId: 11, pointerType: 'touch',
+      clientX: x, clientY: y,
+    }));
+    p.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, cancelable: true, pointerId: 11, pointerType: 'touch',
+      clientX: cx, clientY: cy,
+    }));
+    // 一次拖 260px（远超"一小段"）
+    for (let i = 1; i <= 10; i++) {
+      fireWin('pointermove', cx + 26 * i, cy + 6 * i);
+      await new Promise((res) => setTimeout(res, 16));
+    }
+    const after = { x: p.style.left, y: p.style.top };
+    fireWin('pointerup', cx + 260, cy + 60);
+    // 复位，避免改过的布局影响后面的游戏内检查
+    const reset = Array.from(document.querySelectorAll('#settings .btn'))
+      .find((b) => (b.textContent || '').includes('复位'));
+    if (reset) reset.click();
+    return { before, after };
+  });
+  ok(dragResult !== null, '控件编辑页可打开');
+
+  if (dragResult) {
+    const px = (v) => parseFloat(v) || 0;
+    const dx = px(dragResult.after.x) - px(dragResult.before.x);
+    const dy = px(dragResult.after.y) - px(dragResult.before.y);
+    ok(Math.hypot(dx, dy) > 120,
+      '★ 一次连续拖动能移动大段距离（不是只能挪一点）',
+      `位移 ${Math.hypot(dx, dy).toFixed(0)}px (${dx.toFixed(0)}, ${dy.toFixed(0)})`);
+  }
+
+  await page.locator('#settings .close').click();
+  await page.waitForTimeout(300);
+
   await page.screenshot({ path: '/tmp/bb-menu.png' });
 
   // ---- 7) 进入单人游戏 ----
@@ -263,6 +316,121 @@ const ok = (c, name, extra = '') => {
       ok(yawB !== null && Math.abs(yawB - yawA) < 0.02,
         '★ 滑动摇杆只走路，不会把视角带着转',
         `yaw ${yawA?.toFixed(3)} -> ${yawB?.toFixed(3)}`);
+    }
+
+    // ---- 12.75) 摇杆是真实图形，且摇杆头跟随手指 ----
+    const stickVis = await page.evaluate(() => {
+      const c = document.querySelector('#touch .ctrl.stick');
+      if (!c) return null;
+      const base = c.querySelector('.stick-base');
+      const thumb = c.querySelector('.stick-thumb');
+      return {
+        hasBase: !!base,
+        hasThumb: !!thumb,
+        thumbW: thumb ? thumb.getBoundingClientRect().width : 0,
+        cx: thumb ? thumb.getBoundingClientRect().x + thumb.getBoundingClientRect().width / 2 : 0,
+      };
+    });
+    ok(stickVis && stickVis.hasBase && stickVis.hasThumb && stickVis.thumbW > 4,
+      '★ 摇杆有底座与摇杆头（不是纯文字）',
+      stickVis ? `thumb ${stickVis.thumbW.toFixed(0)}px` : '');
+
+    let stickMoved = false;
+    if (sb && stickVis) {
+      const cdp2 = await page.context().newCDPSession(page);
+      const dp = (type, x, y, id) => cdp2.send('Input.dispatchTouchEvent', {
+        type, touchPoints: [{ x, y, id, radiusX: 12, radiusY: 12, force: 1 }],
+      });
+      await dp('touchStart', sb.x + sb.width / 2, sb.y + sb.height / 2, 7);
+      await dp('touchMove', sb.x + sb.width / 2 + 40, sb.y + sb.height / 2, 7);
+      await page.waitForTimeout(120);
+      const after = await page.evaluate(() => {
+        const t = document.querySelector('#touch .ctrl.stick .stick-thumb');
+        const r = t.getBoundingClientRect();
+        return r.x + r.width / 2;
+      });
+      await dp('touchEnd', sb.x + sb.width / 2 + 40, sb.y + sb.height / 2, 7);
+      await page.waitForTimeout(150);
+      const back = await page.evaluate(() => {
+        const t = document.querySelector('#touch .ctrl.stick .stick-thumb');
+        const r = t.getBoundingClientRect();
+        return r.x + r.width / 2;
+      });
+      stickMoved = Math.abs(after - stickVis.cx) > 8;
+      ok(stickMoved, '★ 摇杆头跟随手指移动', `中心 ${stickVis.cx.toFixed(0)} -> ${after.toFixed(0)}`);
+      ok(Math.abs(back - stickVis.cx) < 8, '松手后摇杆头归位',
+        `回到 ${back.toFixed(0)}（原 ${stickVis.cx.toFixed(0)}）`);
+    }
+
+    // ---- 12.76) 治疗物 UI 存在且可用 ----
+    const healUi = await page.evaluate(() => {
+      const main = document.querySelector('.heal-main');
+      const arrow = document.querySelector('.heal-arrow');
+      if (!main || !arrow) return null;
+      const r = main.getBoundingClientRect();
+      return { w: r.width, h: r.height, x: r.x, y: r.y, text: main.textContent || '' };
+    });
+    ok(healUi && healUi.w > 20 && healUi.h > 20,
+      '★ 治疗物圆形按钮可见', healUi ? `${healUi.w.toFixed(0)}x${healUi.h.toFixed(0)} "${healUi.text.replace(/\s+/g, ' ')}"` : '');
+
+    if (healUi) {
+      // 展开列表
+      await page.locator('.heal-arrow').click();
+      await page.waitForTimeout(250);
+      const items = await page.evaluate(() => {
+        const l = document.querySelector('.heallist');
+        if (!l || l.classList.contains('hidden')) return null;
+        return Array.from(l.querySelectorAll('.heal-item')).map((e) => e.textContent);
+      });
+      ok(items && items.length === 3, '★ 三角展开显示三种物品',
+        items ? items.map((t) => t.replace(/\s+/g, ' ')).join(' | ') : '未展开');
+
+      // 选中急救包
+      const pickOk = await page.evaluate(() => {
+        const bs = Array.from(document.querySelectorAll('.heal-item'));
+        const b = bs.find((e) => (e.textContent || '').includes('急救包'));
+        if (!b) return false;
+        b.click();
+        return true;
+      });
+      await page.waitForTimeout(250);
+      const mainTxt = await page.evaluate(() => document.querySelector('.heal-main')?.textContent || '');
+      ok(pickOk && mainTxt.includes('急救包'), '★ 选中后主按钮切换物品', mainTxt.replace(/\s+/g, ' '));
+
+      // 使用治疗物：血量应先扣再加（先让人机打我们太慢，直接检查流程）
+      const before = await page.evaluate(() => {
+        const s = window.__bb?.session;
+        if (!s) return null;
+        return { hp: s.debugHp, busy: s.healState.using !== null };
+      });
+      // 先把血扣到 50 才能用绷带/急救包
+      await page.evaluate(() => { window.__bb?.session?.setHpForTest(50); });
+      await page.evaluate(() => { window.__bb?.session?.useHeal(); });
+      await page.waitForTimeout(400);
+      const using = await page.evaluate(() => {
+        const s = window.__bb?.session;
+        return s ? { using: s.healState.using, left: s.healState.left } : null;
+      });
+      ok(using && using.using !== null, '★ 点击圆形按钮开始使用治疗物',
+        using ? `${using.using} 剩余 ${using.left?.toFixed(1)}s` : '');
+
+      // 使用期间不可开枪
+      const cannotFire = await page.evaluate(() => {
+        const s = window.__bb?.session;
+        return s ? s.debugCannotFire : null;
+      });
+      ok(cannotFire === true, '★ 使用期间不可开枪', `cannotFire=${cannotFire}`);
+
+      // 取消后可开枪
+      await page.evaluate(() => { window.__bb?.session?.cancelHeal(); });
+      await page.waitForTimeout(250);
+      const afterCancel = await page.evaluate(() => {
+        const s = window.__bb?.session;
+        return s ? { using: s.healState.using, fire: s.debugCannotFire } : null;
+      });
+      ok(afterCancel && afterCancel.using === null && afterCancel.fire === false,
+        '★ 取消后恢复开火能力', JSON.stringify(afterCancel));
+      void before;
     }
 
     // ---- 12.8) 玩家走不出地图边界 ----
