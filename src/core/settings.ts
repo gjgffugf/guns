@@ -1,4 +1,7 @@
-import { defaultControls, type ControlKey, type ControlCfg } from './layout';
+import {
+  defaultControls, CONTROLS_VER,
+  type ControlKey, type ControlCfg,
+} from './layout';
 
 /**
  * 设置持久化（localStorage；在 WebView / Capacitor 里同样可用）。
@@ -24,6 +27,8 @@ export interface Settings {
   crossSize: number;
   crossDot: boolean;
   crossColor: string;
+  /** 控件布局版本；不匹配时迁移本次改动涉及的控件 */
+  controlsVer: number;
 }
 
 export const SETTINGS_KEY = 'bb.settings.v1';
@@ -45,6 +50,7 @@ export function defaultSettings(): Settings {
     crossSize: 1,
     crossDot: true,
     crossColor: '#ffffff',
+    controlsVer: CONTROLS_VER,
   };
 }
 
@@ -75,6 +81,15 @@ export function sanitize(raw: unknown): Settings {
     };
   }
 
+  // ★ 布局迁移：旧存档（没有 controlsVer）里 heal / reload 还停在
+  //   屏幕正下方挡视野的位置，这里单独搬到新默认，其他自定义位置保留。
+  const ver = typeof o.controlsVer === 'number' ? o.controlsVer : 1;
+  if (ver < CONTROLS_VER) {
+    const dp = defaultControls();
+    controls.heal = { ...dp.heal, s: controls.heal.s, a: controls.heal.a };
+    controls.reload = { ...dp.reload, s: controls.reload.s, a: controls.reload.a };
+  }
+
   const style = o.crossStyle;
   return {
     targetFps: fps,
@@ -92,6 +107,7 @@ export function sanitize(raw: unknown): Settings {
     crossSize: num(o.crossSize, 0.5, 2.5, d.crossSize),
     crossDot: typeof o.crossDot === 'boolean' ? o.crossDot : d.crossDot,
     crossColor: typeof o.crossColor === 'string' ? o.crossColor : d.crossColor,
+    controlsVer: CONTROLS_VER,
   };
 }
 

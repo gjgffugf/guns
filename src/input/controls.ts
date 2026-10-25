@@ -155,20 +155,35 @@ export class TouchControls {
     this.drawStick();
   }
 
-  /** 把摇杆头画到当前偏移处（限制在底座半径内） */
+  /**
+   * 把摇杆头画到当前偏移处。
+   *
+   * ★ 之前"不跟手"的原因有两个，都是几何算错：
+   *   1. 行程取 min(w,h)*0.38 ≈ 99px，但底座直径只有 84% ≈ 218px（半径 109），
+   *      摇杆头半径还有 44 —— 99 + 44 = 143 > 109，头会整个飞出底座，
+   *      看起来就是"头卡在边上不动了"。
+   *   2. CSS 给 left/top 加了 40ms 过渡，手指一动就有拖影。
+   *
+   * 现在行程 = 底座半径 - 摇杆头半径，头恰好贴着底座内缘；
+   * 过渡交给 CSS 去掉（见 style.css）。
+   */
   private drawStick(): void {
     const n = this.nodes.get('stick');
     if (!n || !this.thumb) return;
     const cfg = this.cfg?.stick ?? defaultControls().stick;
     const r = rectOf('stick', cfg, window.innerWidth, window.innerHeight);
-    // 摇杆头行程 = 底座半径的 38%
-    const travel = Math.min(r.w, r.h) * 0.38;
     const t = this.thumb;
-    const size = Math.min(r.w, r.h) * 0.34;
+
+    // 底座直径 = 控件短边的 84%（与 CSS .stick-base 一致）
+    const baseR = Math.min(r.w, r.h) * 0.84 / 2;
+    const size = baseR * 0.86;                 // 摇杆头略小于底座
+    // ★ 行程要让摇杆头整体留在底座内：中心最多走到 (底座半径 - 头半径)
+    const travel = Math.max(4, baseR - size / 2);
+
     t.style.width = `${size}px`;
     t.style.height = `${size}px`;
-    t.style.left = `calc(50% + ${this.stickNX * travel}px - ${size / 2}px)`;
-    t.style.top = `calc(50% + ${this.stickNY * travel}px - ${size / 2}px)`;
+    t.style.left = `calc(50% + ${(this.stickNX * travel).toFixed(2)}px - ${(size / 2).toFixed(2)}px)`;
+    t.style.top = `calc(50% + ${(this.stickNY * travel).toFixed(2)}px - ${(size / 2).toFixed(2)}px)`;
     t.classList.toggle('active', this.stickNX !== 0 || this.stickNY !== 0);
   }
 

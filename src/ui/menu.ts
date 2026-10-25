@@ -9,33 +9,15 @@ export interface MenuHandlers {
 }
 
 import type { DiagResult } from '../net/client';
+import {
+  loadServers, saveServers, type SavedServer,
+} from '../core/storage';
 
-export interface SavedServer {
-  name: string;
-  host: string;
-  port: number;
-}
+export type { SavedServer };
 
 export interface MenuHandlers2 extends MenuHandlers {
   /** 打开多人服务器列表 */
   onMulti: () => void;
-}
-
-const SERVERS_KEY = 'bb.servers.v1';
-
-export function loadServers(): SavedServer[] {
-  try {
-    const raw = localStorage.getItem(SERVERS_KEY);
-    if (!raw) return [];
-    const a = JSON.parse(raw) as SavedServer[];
-    return Array.isArray(a) ? a.filter((x) => x && typeof x.host === 'string') : [];
-  } catch {
-    return [];
-  }
-}
-
-export function saveServers(list: SavedServer[]): void {
-  try { localStorage.setItem(SERVERS_KEY, JSON.stringify(list)); } catch { /* 忽略 */ }
 }
 
 /**
@@ -50,14 +32,19 @@ export class ServerPanel {
   private diagEl: HTMLElement;
   private selected = -1;
   private servers: SavedServer[] = loadServers();
-  /** 查询结果缓存：index -> {online, max, rtt, err} */
-  private stats = new Map<number, { online: number; max: number; rtt: number; ok: boolean }>();
+  /** 保存失败的提示（存储不可用时明确告知，而不是假装成功） */
+  private saveWarn = '';
+  /** 查询结果缓存：index -> 状态 */
+  private stats = new Map<number, {
+    online: number; max: number; rtt: number; ok: boolean; pending: boolean; via: string;
+  }>();
 
   constructor(
     parent: HTMLElement,
     private onConnect: (s: SavedServer) => void,
     private onQuery: (s: SavedServer) => Promise<{ online: number; max: number; rtt: number } | null>,
     private onDiag: (s: SavedServer) => Promise<DiagResult | null>,
+    private onProbe: (s: SavedServer) => Promise<{ online: number; max: number; rtt: number } | null>,
     onClose: () => void,
   ) {
     this.node = el('div', { class: 'layer hidden', id: 'servers' });
@@ -71,6 +58,8 @@ export class ServerPanel {
 
     const close = btn('返回', 'btn', () => { this.hide(); onClose(); });
     panel.append(this.listEl, this.formEl, this.actEl, this.diagEl, close);
+    // 全屏铺满（见 style.css）
+    panel.classList.add('full');
     this.node.append(panel);
     parent.append(this.node);
     this.renderList();
@@ -81,19 +70,38 @@ export class ServerPanel {
   hide(): void { show(this.node, false); }
   get isOpen(): boolean { return !this.node.classList.contains('hidden'); }
 
-  /** 刷新所有服务器的延迟与人数 */
+  /**
+   * 刷新所有服务器的延迟与人数。
+   *
+   * ★ 之前只用 HTTP 状态页查询，而页面是 https://、状态页是 http://，
+   *   属于混合内容，很可能被 WebView 拦掉 —— 结果就是"延迟一直不显示"。
+   *   现在 HTTP 失败后自动改用 WebSocket 探测兜底（游戏内本来就是通的）。
+   */
   async refreshAll(): Promise<void> {
     this.stats.clear();
     this.renderList();
     for (let i = 0; i < this.servers.length; i++) {
-      const r = await this.onQuery(this.servers[i]);
-      this.stats.set(i, r ? { ...r, ok: true } : { online: -1, max: -1, rtt: -1, ok: false });
+      const sv = this.servers[i];
+      // 先把该行标成"查询中"，避免看起来像卡住
+      this.stats.set(i, { online: -1, max: -1, rtt: -1, ok: false, pending: true, via: '' });
+      this.renderList();
+
+      let r = await this.onQuery(sv);
+      let via = 'http';
+      if (!r) { r = await this.onProbe(sv); via = 'ws'; }
+
+      this.stats.set(i, r
+        ? { ...r, ok: true, pending: false, via }
+        : { online: -1, max: -1, rtt: -1, ok: false, pending: false, via: '' });
       this.renderList();
     }
   }
 
   private renderList(): void {
     while (this.listEl.firstChild) this.listEl.removeChild(this.listEl.firstChild);
+    if (this.saveWarn) {
+      this.listEl.append(el('div', { class: 'note warn', text: this.saveWarn }));
+    }
     if (this.servers.length === 0) {
       this.listEl.append(el('div', { class: 'note', text: '还没有服务器，在下方添加' }));
       return;
@@ -102,7 +110,7 @@ export class ServerPanel {
       const row = el('button', { class: 'srvrow', type: 'button' }) as HTMLButtonElement;
       if (i === this.selected) row.classList.add('on');
       const st = this.stats.get(i);
-      const statTxt = !st ? '查询中…'
+      const statTxt = !st || st.pending ? '查询中…'
         : st.ok ? `${st.rtt}ms · ${st.online}/${st.max} 人`
           : '无法连接';
       row.append(
@@ -141,7 +149,10 @@ export class ServerPanel {
         this.servers.push(item);
         this.selected = this.servers.length - 1;
       }
-      saveServers(this.servers);
+      // ★ 保存后要确认真的写进去了，失败就在界面上说明
+      this.saveWarn = saveServers(this.servers)
+        ? ''
+        : '⚠ 保存失败：本机存储不可用，重启后服务器列表会丢失';
       this.renderList();
       this.renderForm(null);
       this.renderActs();
@@ -177,7 +188,7 @@ export class ServerPanel {
       btn('删除', 'btn danger', () => {
         this.servers.splice(this.selected, 1);
         this.selected = -1;
-        saveServers(this.servers);
+        this.saveWarn = saveServers(this.servers) ? '' : '⚠ 保存失败';
         this.renderList();
         this.renderActs();
       }),
@@ -199,7 +210,7 @@ export class MainMenu {
     left.append(
       el('div', { class: 'title', text: '破绷战场' }),
       el('div', { class: 'sub', text: 'B R E A K B I N D   B A T T L E F I E L D' }),
-      el('div', { class: 'foot', text: 'xfan.games.gun   v0.2.5' }),
+      el('div', { class: 'foot', text: 'xfan.games.gun   v0.2.6' }),
     );
 
     const right = el('div', { class: 'right' });

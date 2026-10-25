@@ -153,9 +153,23 @@ function addWsPlayer(socket, addr) {
  * 处理一条 WS 消息。语义与 UDP 分支保持一致：
  * join / state / ping / hit / leave。
  */
+/** 已入场（发过 join）且未离场的玩家数 */
+function countOnline() {
+  return [...players.values()].filter((x) => x.joined && !x.dead).length;
+}
+
 function handleWsMsg(p, msg) {
   switch (msg.t) {
+    // ★ 只查状态不建号：客户端在游戏外测延迟/人数用，
+    //   走 join 会真的占一个位置，房间里会闪现一个幽灵玩家。
+    case 'query': {
+      // 只统计已 join 的：WS 握手后自己已在 players 里，
+      // 不加这个过滤探测者会把【自己】算进去。
+      sendTo(p, { t: 'info', online: countOnline(), max: MAX_PLAYERS });
+      return;
+    }
     case 'join': {
+      p.joined = true;            // ★ 真正入场，才计入在线人数
       p.name = String(msg.name || '玩家').slice(0, 16);
       // welcome 不包自己：否则客户端会把自己的模型也画一份
       const others = snapshot().filter((x) => x.id !== p.id);
@@ -401,9 +415,9 @@ http.createServer((req, res) => {
   const url = req.url || '/';
   const info = {
     name: SERVER_NAME,
-    online: players.size,
+    online: countOnline(),
     max: MAX_PLAYERS,
-    version: '0.2.4',
+    version: '0.2.6',
     map: 'arena',
     udp: PORT,
     list: snapshot().map((p) => ({ name: p.name, hp: p.hp, k: p.kills, d: p.deaths })),

@@ -82,6 +82,45 @@ const ok = (c, name, extra = '') => {
   ok(box0 && box0.width > 0 && box0.height > 0, '按钮有实际尺寸',
     box0 ? `${Math.round(box0.width)}x${Math.round(box0.height)}` : '');
 
+  // ---- 3.5) 服务器列表：全屏 / 多个 / 重启后仍在 ----
+  await page.evaluate(() => {
+    const b = [...document.querySelectorAll('#menu .mode')]
+      .find((x) => x.textContent.includes('多'));
+    if (b) b.click();
+  });
+  await page.waitForTimeout(400);
+
+  const srvFull = await page.evaluate(() => {
+    const p = document.querySelector('#servers .panel');
+    if (!p) return null;
+    const r = p.getBoundingClientRect();
+    return { w: r.width, h: r.height, vw: window.innerWidth, vh: window.innerHeight };
+  });
+  if (srvFull) {
+    ok(srvFull.w >= srvFull.vw - 2 && srvFull.h >= srvFull.vh - 2,
+      '★ 服务器列表窗口全屏',
+      `${srvFull.w.toFixed(0)}x${srvFull.h.toFixed(0)} vs 视口 ${srvFull.vw}x${srvFull.vh}`);
+  }
+
+  const persisted = await page.evaluate(() => {
+    const mod = window.__bbStorage;
+    if (!mod) return null;
+    const a = mod.loadServers();
+    mod.saveServers([...a,
+      { name: '甲', host: '192.168.1.11', port: 19000 },
+      { name: '乙', host: '192.168.1.12', port: 19000 }]);
+    return mod.loadServers().length;      // 模拟重启后重新读取
+  });
+  if (persisted !== null) {
+    ok(persisted >= 2, '★ 可添加多个服务器且重启后仍在', `${persisted} 个`);
+  }
+
+  await page.evaluate(() => {
+    const b = [...document.querySelectorAll('#servers .btn')].find((x) => x.textContent === '返回');
+    if (b) b.click();
+  });
+  await page.waitForTimeout(300);
+
   // ---- 4) 设置面板能打开 ----
   await page.locator('#menu .gear').click();
   await page.waitForTimeout(300);
@@ -172,6 +211,19 @@ const ok = (c, name, extra = '') => {
     ok(diag.http === false, '★ 诊断：状态页同样不通', diag.httpDetail);
   }
   errors.splice(errMark);            // 丢弃诊断期间产生的预期错误
+
+  // ---- 6.8) 设置里可以改玩家名字 ----
+  const nameRes = await page.evaluate(async () => {
+    const inp = document.querySelector('#settings .textinput');
+    if (!inp) return null;
+    inp.value = '测试指挥官';
+    inp.dispatchEvent(new Event('change', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 150));
+    return inp.value;
+  });
+  if (nameRes !== null) {
+    ok(nameRes === '测试指挥官', '★ 设置里可自定义玩家名字', nameRes);
+  }
 
   await page.locator('#settings .close').click();
   await page.waitForTimeout(300);

@@ -68,3 +68,53 @@ export function pump(a: Accum, dt: number): { steps: number; accum: Accum } {
   }
   return { steps, accum: { ...a, left: rest } };
 }
+
+/**
+ * ★ 渲染帧率统计（只统计真正渲染出来的帧）。
+ *
+ * 之前把计数放在帧门控【外面】：rAF 跑多快就记多快，
+ * 于是屏幕上显示的是"浏览器回调频率"，而不是"游戏实际帧率"。
+ * 选 60 时 120Hz 屏会看到 120，看着像限流没生效。
+ *
+ * 更麻烦的是切后台：页面隐藏时 rAF 间隔会变得很大（甚至暂停），
+ * 回来那一帧的 dt 是个巨大的数，混进平均值里会把读数带偏 ——
+ * 表现就是"滑到后台后帧率跳到 120"。
+ *
+ * 现在只在真正渲染时累加，并且由调用方在页面隐藏时停止推进。
+ */
+export interface Meter {
+  frames: number;
+  acc: number;
+  fps: number;
+}
+
+export function createRenderMeter(): Meter {
+  return { frames: 0, acc: 0, fps: 0 };
+}
+
+/**
+ * 记录一帧已渲染，返回平滑后的 FPS（每累计 0.5s 更新一次读数）。
+ *
+ * @param gap 距【上一次渲染】的时间，不是单个 rAF 帧的间隔。
+ *   120Hz 屏选 60 时，每两个 rAF 才渲染一次，gap 就是两帧之和；
+ *   若误传单帧 dt，算出来的 FPS 会翻倍（60 显示成 120）。
+ */
+export function pushRender(m: Meter, gap: number): Meter {
+  const acc = m.acc + gap;
+  const frames = m.frames + 1;
+  if (acc < 0.5) return { frames, acc, fps: m.fps };
+  return { frames: 0, acc: 0, fps: frames / acc };
+}
+
+/** 页面重新可见时调用：丢弃暂停期间的累计，避免读数被污染 */
+export function resetMeter(): Meter {
+  return { frames: 0, acc: 0, fps: 0 };
+}
+
+/**
+ * 页面是否应当暂停循环。
+ * 抽成函数是为了能在测试里模拟 hidden 状态。
+ */
+export function shouldPause(docHidden: boolean): boolean {
+  return docHidden;
+}

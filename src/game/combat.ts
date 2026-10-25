@@ -174,3 +174,24 @@ export function dirFrom(yaw: number, pitch: number): V3 {
 
 /** 水平距离（复用） */
 export { distXZ };
+
+/**
+ * ★ 视角 yaw -> 人物模型绕 Y 轴的角度。
+ *
+ * 约定：
+ *   - 视角朝向 dirFrom(yaw) = (sin yaw, *, -cos yaw)，即 yaw=0 面向 -z
+ *   - 火柴人模型的【正面是 -z】（枪挂在 z = -0.42，躯干朝 -z）
+ *
+ * Three.js 绕 Y 轴旋转 θ 时，局部 -z 会变成 (-sinθ, 0, -cosθ)。
+ * 要让它等于 (sin yaw, 0, -cos yaw)，解得 θ = -yaw。
+ *
+ * ★ 之前写的是 `yaw + Math.PI`，那是把模型当成"正面 +z"来算的，
+ *   结果在 yaw=0（朝 -z）时模型却背对着 —— 也就是"视角朝前、
+ *   人却是背对"。更麻烦的是 ±π/2 附近两个公式恰好重合，
+ *   于是表现为"某些角度对、某些角度反"，很难一眼看出规律。
+ *
+ * 这里抽成纯函数并配单元测试，避免再写错。
+ */
+export function modelYaw(yaw: number): number {
+  return -yaw;
+}

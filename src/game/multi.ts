@@ -21,9 +21,12 @@ import {
 } from './weapon';
 import { safeSpawn } from './bot';
 import { applyLook } from './aim';
-import { eyePos, dirFrom, pickTarget, rayBlockDistance, rayHitWall } from './combat';
+import { eyePos, dirFrom, pickTarget, rayBlockDistance, rayHitWall, modelYaw } from './combat';
 import type { Settings } from '../core/settings';
 import { sfx } from '../core/sfx';
+import {
+  createRenderMeter, pushRender, resetMeter, type Meter,
+} from '../core/loop';
 import {
   createHeal, beginUse, tickHeal, cancelUse, applyHeal, isBusy, canUse,
   HEAL_DEFS, HEAL_ORDER, speedMul, takenMul, dealtMul,
@@ -92,6 +95,8 @@ export class MultiSession {
 
   /** 连接结果：'' = 还没结果，非空 = 失败原因 */
   private connError = '';
+  /** 是否曾经成功连上（用于区分"首次连不上"与"中途掉线"） */
+  private everOnline = false;
   /** onopen 后设为 true */
   private ready = false;
   private readyWaiters: Array<(ok: boolean) => void> = [];
@@ -115,6 +120,7 @@ export class MultiSession {
   get connectError(): string { return this.connError; }
 
   private settle(ok: boolean, err = ''): void {
+    if (ok) this.everOnline = true;
     this.ready = ok;
     if (err) this.connError = err;
     for (const w of this.readyWaiters) w(ok);
@@ -132,9 +138,11 @@ export class MultiSession {
   private raf = 0;
   private lastT = 0;
   private animT = 0;
-  private frames = 0;
-  private fpsAcc = 0;
-  private fps = 60;
+  private meter: Meter = createRenderMeter();
+  private running = false;
+  private tickFn: FrameRequestCallback | null = null;
+  private visBound = false;
+  private onVis: (() => void) | null = null;
   private sinceRender = 0;
   private sendAcc = 0;
   private respawnLeft = 0;
@@ -176,6 +184,8 @@ export class MultiSession {
         this.ui.setTip(this.statusText);
         if (st === 'online') {
           this.settle(true);
+          // 重连成功：清掉之前显示的失败/断开提示
+          this.ui.setNotice('');
         } else if (st === 'error') {
           // ★ 把关闭码带上，1006 基本就是"根本没连出去"
           const code = this.net.closeCode;
@@ -186,13 +196,19 @@ export class MultiSession {
           this.ui.setNotice(`连接失败${tail} · ${why}`);
           this.settle(false, why);
         } else if (st === 'closed') {
-          this.settle(false, '已断开');
+          // ★ 只有"从未连上"才判定为失败并退回菜单；
+          //   已经进过房间又断开的，留在游戏里等自动重连。
+          if (!this.everOnline) this.settle(false, '已断开');
+        } else if (st === 'reconnecting') {
+          this.ui.setNotice('');
+          this.ui.setCenter('');
         }
       },
       onWelcome: (id, players, max) => {
         this.myId = id;
         void max;
         this.settle(true);
+        this.everOnline = true;
         this.ui.setNotice('');
         this.ui.setTip(`已连接 · ${players.length + 1} 人在房间`);
         for (const p of players) this.ensureRemote(p);
@@ -286,35 +302,63 @@ export class MultiSession {
   start(): void {
     if (this.noGL) this.ui.setNotice('WebGL 不可用，无法显示画面');
     this.lastT = performance.now();
+    this.meter = resetMeter();
     const tick = (now: number): void => {
+      this.raf = requestAnimationFrame(tick);
       const dt = Math.min(0.1, (now - this.lastT) / 1000);
       this.lastT = now;
-      this.frames++;
-      this.fpsAcc += dt;
-      if (this.fpsAcc >= 0.5) {
-        this.fps = this.frames / this.fpsAcc;
-        this.frames = 0;
-        this.fpsAcc = 0;
-        this.ui.setFps(this.fps);
-        // 右上角顺带显示延迟
-        this.ui.setScore(`击杀 ${this.myKills} / 死亡 ${this.myDeaths} · 全场 ${this.totalKills}`
-          + (this.rtt >= 0 ? ` · ${this.rtt}ms` : ''));
-      }
       this.sinceRender += dt;
       const budget = this.s.targetFps > 0 ? 1 / this.s.targetFps - 0.0005 : 0;
       if (this.sinceRender >= budget) {
+        const gap = this.sinceRender;
         this.sinceRender = 0;
-        this.update(dt);
+        // ★ 只统计真正渲染出来的帧；gap 是距上次渲染的时间
+        this.meter = pushRender(this.meter, gap);
+        if (this.meter.fps > 0) {
+          this.ui.setFps(this.meter.fps);
+          // 右上角顺带显示延迟
+          this.ui.setScore(`击杀 ${this.myKills} / 死亡 ${this.myDeaths} · 全场 ${this.totalKills}`
+            + (this.rtt >= 0 ? ` · ${this.rtt}ms` : ''));
+        }
+        this.update(gap);
         this.render();
       }
-      this.raf = requestAnimationFrame(tick);
     };
+    this.tickFn = tick;
+    this.running = true;
     this.raf = requestAnimationFrame(tick);
+    this.bindVisibility();
+  }
+
+  /** 切后台暂停循环（与单人模式同样的原因：避免帧率读数被污染） */
+  private bindVisibility(): void {
+    if (this.visBound) return;
+    this.visBound = true;
+    this.onVis = () => {
+      if (document.hidden) {
+        if (this.raf) cancelAnimationFrame(this.raf);
+        this.raf = 0;
+        this.meter = resetMeter();
+      } else if (!this.raf && this.running && this.tickFn) {
+        this.lastT = performance.now();
+        this.sinceRender = 0;
+        this.meter = resetMeter();
+        this.raf = requestAnimationFrame(this.tickFn);
+      }
+    };
+    document.addEventListener('visibilitychange', this.onVis);
   }
 
   stop(): void {
+    this.running = false;
     if (this.raf) cancelAnimationFrame(this.raf);
     this.raf = 0;
+    this.tickFn = null;
+    if (this.onVis) {
+      document.removeEventListener('visibilitychange', this.onVis);
+      this.onVis = null;
+    }
+    this.visBound = false;
     this.net.close();
     window.removeEventListener('resize', () => this.resize());
     if (this.renderer) this.renderer.dispose();
@@ -420,7 +464,7 @@ export class MultiSession {
       const m = v.mesh;
       m.root.visible = v.alive;
       m.root.position.set(v.x, v.y, v.z);
-      m.root.rotation.y = v.yaw + Math.PI;
+      m.root.rotation.y = modelYaw(v.yaw);
       // 倒地：放倒
       m.root.rotation.x = v.alive ? 0 : Math.PI / 2 * 0.85;
       const speed = Math.hypot(v.tx - v.x, v.tz - v.z) / Math.max(dt, 1e-3);
@@ -629,6 +673,7 @@ function labelOf(st: string): string {
     case 'connecting': return '连接中…';
     case 'online': return '已连接';
     case 'error': return '连接失败';
+    case 'reconnecting': return '重连中';
     case 'closed': return '已断开';
     default: return '未连接';
   }

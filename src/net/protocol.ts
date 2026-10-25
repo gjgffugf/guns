@@ -17,6 +17,8 @@ export type ClientMsg =
   | { t: 'ping'; ts: number }
   | { t: 'hit'; target: string; damage: number; head: boolean }
   | { t: 'shoot'; x: number; y: number; z: number; dx: number; dy: number; dz: number }
+  /** 只查状态，不创建玩家（游戏外测延迟用） */
+  | { t: 'query' }
   | { t: 'leave' };
 
 /** 服务端 → 客户端 */
@@ -28,6 +30,8 @@ export type ServerMsg =
   | { t: 'leave'; id: string }
   | { t: 'hit'; from: string; damage: number; head: boolean }
   | { t: 'kill'; killer: string; victim: string }
+  /** query 的应答 */
+  | { t: 'info'; online: number; max: number }
   | { t: 'error'; msg: string };
 
 export interface RemoteSnapshot {

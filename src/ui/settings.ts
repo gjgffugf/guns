@@ -199,6 +199,31 @@ export class SettingsPanel {
 
   // ---------------- 通用 ----------------
   private renderGeneral(): void {
+    // ★ 玩家名字（联机时其他玩家看到的名字）
+    const nameRow = el('div', { class: 'row' });
+    nameRow.append(el('label', { text: '玩家名字' }));
+    const nameI = el('input', {
+      type: 'text', value: this.s.playerName, maxlength: '16',
+    }) as HTMLInputElement;
+    nameI.placeholder = '指挥官';
+    nameI.classList.add('textinput');
+    // 输入时即时生效；失焦或回车时收起软键盘并重绘
+    const apply = (): void => {
+      const v = nameI.value.trim().slice(0, 16);
+      this.s.playerName = v || '指挥官';
+      nameI.value = this.s.playerName;
+      this.commit();
+    };
+    nameI.addEventListener('change', () => { apply(); this.render(); });
+    nameI.addEventListener('keydown', (e) => {
+      if ((e as KeyboardEvent).key === 'Enter') { apply(); nameI.blur(); this.render(); }
+    });
+    nameRow.append(nameI);
+    this.body.append(nameRow);
+    this.body.append(el('div', {
+      class: 'note', text: '联机时显示给其他玩家，最长 16 字',
+    }));
+
     // FPS
     const fpsRow = el('div', { class: 'row' });
     fpsRow.append(el('label', { text: '帧率上限' }));

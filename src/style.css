@@ -127,6 +127,11 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 #settings .tabs { width: 190px; display: flex; flex-direction: column; gap: 10px; }
 #settings .tabs button { padding: 14px 10px; font-size: 19px; }
 #settings .tabs button.on { background: rgba(178,32,36,.9); border-color: rgba(255,255,255,.8); }
+#settings .textinput {
+  flex: 1; padding: 10px 12px; border-radius: 10px; font-size: 18px;
+  border: 2px solid rgba(255,255,255,.28);
+  background: rgba(0,0,0,.35); color: #e9eef8;
+}
 /* 设置：右侧可长按拖动的滚动条 */
 #settings .scroller {
   position: relative;
@@ -276,7 +281,9 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   background: radial-gradient(circle at 35% 30%, rgba(255,255,255,.95), rgba(150,170,210,.75));
   border: 2px solid rgba(255,255,255,.9);
   box-shadow: 0 3px 10px rgba(0,0,0,.5);
-  transition: left .04s linear, top .04s linear;
+  /* ★ 不要给 left/top 加过渡：手指一动就拖影，手感像"不跟手"。
+     松手归位才需要动画，由 .stick-thumb.active 之外的回弹类处理。 */
+  will-change: left, top;
 }
 
 /* ---------------- 射击 / 受击反馈 ---------------- */
@@ -411,17 +418,28 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 }
 
 /* ---------------- 服务器列表 ---------------- */
+/* ★ 服务器列表改为全屏：手机上 760px 的窄面板里
+   列表 + 表单 + 按钮组挤在一起，按钮很容易点歪。 */
 #servers .panel {
-  width: min(760px, 92vw); max-height: 92vh;
+  width: 100vw; height: 100vh; max-width: none; max-height: none;
   display: flex; flex-direction: column; gap: 10px;
-  padding: 16px; border-radius: 14px;
-  background: rgba(12,15,22,.96);
-  border: 2px solid rgba(255,255,255,.16);
+  padding: calc(16px + env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-right, 0px))
+           calc(16px + env(safe-area-inset-bottom, 0px)) calc(16px + env(safe-area-inset-left, 0px));
+  border-radius: 0; border: none;
+  background: rgba(12,15,22,.98);
 }
+#servers .panel.full { box-sizing: border-box; }
 #servers .hd { font-size: 20px; color: #e9eef8; }
 #servers .srvlist {
   display: flex; flex-direction: column; gap: 6px;
-  max-height: 40vh; overflow-y: auto;
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+}
+#servers .srvform { flex: 0 0 auto; }
+#servers .srvact { flex: 0 0 auto; }
+#servers .diag { flex: 0 0 auto; max-height: 22vh; }
+#servers .note.warn {
+  color: #ffcf6b; background: rgba(120,80,10,.35);
+  border: 1px solid rgba(255,200,90,.5); border-radius: 8px; padding: 8px 10px;
 }
 #servers .srvrow {
   display: flex; align-items: center; gap: 12px;

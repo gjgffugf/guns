@@ -98,6 +98,7 @@ def broadcast():
 
 
 def handle_join(p, msg, out):
+    p["joined"] = True          # ★ 标记为真正入场，query/状态页才计入
     p["name"] = (msg.get("name") or "玩家")[:16]
     # ★ welcome 里不包自己：否则客户端会把自己的模型也画一份出来。
     #   （客户端也做了 id 过滤，但服务端直接不给最干净。）
@@ -131,6 +132,11 @@ def handle_hit(src, msg, out):
         print("[kill] %s -> %s" % (src["name"], tgt["name"]))
 
 
+# 已入场（发过 join）且未离场的玩家数
+def count_online():
+    return len([x for x in players.values() if x.get("joined") and not x.get("dead")])
+
+
 def process(p, msg):
     """
     处理一条客户端消息。
@@ -138,7 +144,18 @@ def process(p, msg):
     """
     out = []            # [(target_id, msg)]，target_id=None 表示只回给自己
     t = msg.get("t")
-    if t == "join":
+    if t == "query":
+        # ★ 只查状态，不建号：客户端在游戏外测延迟/人数用。
+        #   走 join 会真的占一个位置并在房间里闪现一个幽灵玩家。
+        #
+        #   注意 WS 连接在握手后就已经占了一条 players 记录（p 就是自己），
+        #   所以必须只统计【已 join】的，否则探测者会把自己算进去。
+        out.append((None, {
+            "t": "info",
+            "online": count_online(),
+            "max": MAX_PLAYERS,
+        }))
+    elif t == "join":
         handle_join(p, msg, out)
     elif t == "state":
         for k in ("x", "y", "z", "yaw", "pitch"):
@@ -423,8 +440,8 @@ def http_thread(conn):
                 path = parts[1]
         if path.startswith("/info"):
             body = json.dumps({
-                "name": SERVER_NAME, "online": len(players), "max": MAX_PLAYERS,
-                "version": "0.2.4", "map": "arena",
+                "name": SERVER_NAME, "online": count_online(), "max": MAX_PLAYERS,
+                "version": "0.2.6", "map": "arena",
             }).encode("utf-8")
             head = (
                 "HTTP/1.1 200 OK\r\n"

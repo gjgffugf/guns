@@ -6,7 +6,22 @@
 
 import { parseServerMsg, type ClientMsg, type RemoteSnapshot, type ServerMsg, type ServerInfo } from './protocol';
 
-export type NetStatus = 'idle' | 'connecting' | 'online' | 'error' | 'closed';
+/** ★ 'reconnecting' = 断开后正在自动重连（区别于首次连接） */
+export type NetStatus = 'idle' | 'connecting' | 'online' | 'error' | 'closed' | 'reconnecting';
+
+/** 自动重连最多尝试次数 */
+export const MAX_RETRY = 5;
+
+/**
+ * 重连退避间隔（毫秒）。
+ * 取"递增"而不是固定值：服务器刚重启时立刻重试多半还是失败，
+ * 每轮多等一会儿才更容易在它恢复后连上。
+ * 注入 retryDelay 后便于单元测试。
+ */
+export function backoffMs(attempt: number): number {
+  const table = [800, 1500, 2500, 4000, 6000];
+  return table[Math.min(attempt, table.length - 1)];
+}
 
 export interface NetEvents {
   onStatus: (s: NetStatus, detail: string) => void;
@@ -155,6 +170,14 @@ export class NetClient {
   private status: NetStatus = 'idle';
   private pingTimer = 0;
   private lastPingAt = 0;
+  /** 自动重连：记住上次连接的参数 */
+  private url = '';
+  private name = '';
+  /** 已尝试的重连次数 */
+  private retries = 0;
+  private retryTimer = 0;
+  /** 主动关闭（玩家退出）不再重连 */
+  private intentionalClose = false;
   /** 最近一次往返延迟（ms） */
   private rtt = -1;
   /** 最近一次关闭码，用于诊断（1006 = 连不上 / 被拦截） */
@@ -169,9 +192,16 @@ export class NetClient {
   get latency(): number { return this.rtt; }
   get closeCode(): number { return this.lastCloseCode; }
   get selfId(): string { return this.myId; }
+  /** 当前重连次数（0 = 还没重连过） */
+  get retryCount(): number { return this.retries; }
   private myId = '';
 
   connect(url: string, name: string, timeoutMs = 6000): void {
+    this.url = url;
+    this.name = name;
+    this.intentionalClose = false;
+    this.retries = 0;
+    this.clearRetry();
     this.close();
     this.setStatus('connecting', url);
     let ws: WebSocket;
@@ -193,6 +223,8 @@ export class NetClient {
 
     ws.onopen = () => {
       window.clearTimeout(to);
+      // 重连成功：清零计数，下次断开重新从 1 开始
+      this.retries = 0;
       this.setStatus('online', url);
       this.send({ t: 'join', name });
       // 心跳：测延迟 + 保活
@@ -222,7 +254,101 @@ export class NetClient {
       if (this.pingTimer) window.clearInterval(this.pingTimer);
       this.pingTimer = 0;
       this.lastCloseCode = e.code;
-      if (this.status !== 'error') this.setStatus('closed', `已断开 (${e.code})`);
+      this.ws = null;
+
+      // ★ 主动退出/首次连接失败不再重连。
+      //   只有"连上过又断开"才自动重连，避免玩家点退出后又被拉回来。
+      const hadSession = this.myId !== '' || this.retries > 0;
+      if (this.intentionalClose || (!hadSession && e.code === 1006)) {
+        if (this.status !== 'error') this.setStatus('closed', `已断开 (${e.code})`);
+        return;
+      }
+      this.scheduleRetry();
+    };
+  }
+
+  /**
+   * ★ 断开后自动重连，最多 MAX_RETRY 次。
+   *
+   * 判定顺序很关键：必须先判断是否还有额度，
+   * 用完才置为 closed —— 否则会先报"已断开"再偷偷重连，
+   * 界面上一闪而过的顺序是反的。
+   */
+  private scheduleRetry(): void {
+    if (this.retries >= MAX_RETRY) {
+      this.setStatus('closed', `已断开 · 重连 ${MAX_RETRY} 次均未成功`);
+      return;
+    }
+    this.retries += 1;
+    const wait = backoffMs(this.retries - 1);
+    this.setStatus('reconnecting', `重连中 ${this.retries}/${MAX_RETRY}（${(wait / 1000).toFixed(1)}s 后）`);
+    this.clearRetry();
+    this.retryTimer = window.setTimeout(() => {
+      this.retryTimer = 0;
+      if (this.intentionalClose) return;
+      this.open(this.url, this.name);
+    }, wait);
+  }
+
+  private clearRetry(): void {
+    if (this.retryTimer) window.clearTimeout(this.retryTimer);
+    this.retryTimer = 0;
+  }
+
+  /** 发起一次连接（不重置重连计数，供重连复用） */
+  private open(url: string, name: string, timeoutMs = 6000): void {
+    if (!url) return;
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(url);
+    } catch {
+      this.scheduleRetry();
+      return;
+    }
+    this.ws = ws;
+    const to = window.setTimeout(() => {
+      if (this.status === 'connecting' || this.status === 'reconnecting') {
+        try { ws.close(); } catch { /* ignore */ }
+      }
+    }, timeoutMs);
+
+    ws.onopen = () => {
+      window.clearTimeout(to);
+      this.retries = 0;
+      this.setStatus('online', url);
+      this.send({ t: 'join', name });
+      if (this.pingTimer) window.clearInterval(this.pingTimer);
+      this.pingTimer = window.setInterval(() => {
+        this.lastPingAt = performance.now();
+        this.send({ t: 'ping', ts: this.lastPingAt });
+      }, 2000);
+      for (const m of this.queue) this.rawSend(m);
+      this.queue.length = 0;
+    };
+
+    ws.onmessage = (e: MessageEvent) => {
+      const msg = typeof e.data === 'string' ? parseServerMsg(e.data) : null;
+      if (!msg) return;
+      this.handle(msg);
+    };
+
+    ws.onerror = () => {
+      window.clearTimeout(to);
+      // 这里不设 error：真正的判定交给 onclose，避免状态被覆盖
+    };
+
+    ws.onclose = (e: CloseEvent) => {
+      window.clearTimeout(to);
+      if (this.pingTimer) window.clearInterval(this.pingTimer);
+      this.pingTimer = 0;
+      this.lastCloseCode = e.code;
+      this.ws = null;
+      const hadSession = this.myId !== '' || this.retries > 0;
+      if (this.intentionalClose || (!hadSession && e.code === 1006)) {
+        if (this.status !== 'error') this.setStatus('closed', `已断开 (${e.code})`);
+        return;
+      }
+      this.scheduleRetry();
     };
   }
 
@@ -273,7 +399,10 @@ export class NetClient {
     this.ev.onStatus(s, d);
   }
 
+  /** 主动关闭：不再自动重连 */
   close(): void {
+    this.intentionalClose = true;
+    this.clearRetry();
     if (this.pingTimer) window.clearInterval(this.pingTimer);
     this.pingTimer = 0;
     if (this.ws) {
@@ -282,6 +411,79 @@ export class NetClient {
     }
     this.myId = '';
   }
+}
+
+/**
+ * ★ 用 WebSocket 探测服务器（HTTP 状态页不通时的兜底）。
+ *
+ * 为什么要这个：状态页是 http://，而 App 页面是 https://（Capacitor 的
+ *   androidScheme）。从 https 页面请求 http 属于【混合内容】，
+ *   即使服务端带了 Access-Control-Allow-Origin，也可能被 WebView 拦下，
+ *   表现就是"延迟一直不显示"。而 ws:// 在游戏里是通的，
+ *   所以用它来兜底最可靠。
+ *
+ * 连上后服务器会立刻下发 welcome（含在场玩家与上限），
+ * 再发一个 ping 就能量出往返延迟 —— 人数和延迟都能拿到。
+ */
+export function probeServer(
+  host: string, port: number, timeoutMs = 5000,
+): Promise<{ online: number; max: number; rtt: number } | null> {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v: { online: number; max: number; rtt: number } | null): void => {
+      if (done) return;
+      done = true;
+      window.clearTimeout(to);
+      try { ws.close(); } catch { /* ignore */ }
+      resolve(v);
+    };
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(toWsUrl(host, port));
+    } catch {
+      resolve(null);
+      return;
+    }
+    const to = window.setTimeout(() => finish(null), timeoutMs);
+
+    let online = -1;
+    let max = -1;
+    const t0 = performance.now();
+
+    ws.onopen = () => {
+      // ★ 先 query 拿人数（不建号，不会在房间里留下幽灵玩家），
+      //   再 ping 量延迟。两者都到齐或任一超时就结束。
+      try {
+        ws.send(JSON.stringify({ t: 'query' }));
+        ws.send(JSON.stringify({ t: 'ping', ts: t0 }));
+      } catch { /* ignore */ }
+    };
+    let rtt = -1;
+    const maybe = (): void => {
+      if (rtt < 0) return;
+      finish({ online: online < 0 ? 1 : online, max: max < 0 ? 0 : max, rtt });
+    };
+    ws.onmessage = (e: MessageEvent) => {
+      if (typeof e.data !== 'string') return;
+      const m = parseServerMsg(e.data);
+      if (!m) return;
+      if (m.t === 'info') {
+        online = m.online;
+        max = m.max;
+        maybe();
+      } else if (m.t === 'welcome') {
+        // 老服务端没有 query，用 welcome 兜底
+        online = m.players.length + 1;
+        max = m.max;
+        maybe();
+      } else if (m.t === 'pong') {
+        rtt = Math.round(performance.now() - m.ts);
+        maybe();
+      }
+    };
+    ws.onerror = () => finish(null);
+    ws.onclose = () => finish(null);
+  });
 }
 
 /** 查询服务器信息（HTTP，不进房间就能看到在线人数） */

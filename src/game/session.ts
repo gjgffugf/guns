@@ -11,10 +11,13 @@ import {
 } from './weapon';
 import { createBot, stepBot, hurtBot, safeSpawn } from './bot';
 import { applyLook } from './aim';
-import { eyePos, dirFrom, pickTarget, rayBlockDistance, rayHitWall } from './combat';
+import { eyePos, dirFrom, pickTarget, rayBlockDistance, rayHitWall, modelYaw } from './combat';
 import type { Settings } from '../core/settings';
 import type { V3 } from '../core/vec';
 import { sfx } from '../core/sfx';
+import {
+  createRenderMeter, pushRender, resetMeter, type Meter,
+} from '../core/loop';
 import {
   createHeal, beginUse, tickHeal, cancelUse, applyHeal, isBusy, canUse,
   HEAL_DEFS, HEAL_ORDER, speedMul, takenMul, dealtMul,
@@ -92,11 +95,16 @@ export class SoloSession {
   private ui: SessionUI;
   private s: Settings;
   private raf = 0;
+  /** 循环是否仍在运行（用于切回前台时判断是否要恢复） */
+  private running = false;
+  /** 当前 tick 函数句柄（切回前台时重启用） */
+  private tickFn: FrameRequestCallback | null = null;
+  private visBound = false;
+  private onVis: (() => void) | null = null;
+  private meter: Meter = createRenderMeter();
   private lastT = 0;
   private sinceRender = 0;
-  private frames = 0;
-  private fpsAcc = 0;
-  private fps = 60;
+
 
   private canvas: HTMLCanvasElement;
 
@@ -241,34 +249,69 @@ export class SoloSession {
       this.ui.setNotice('WebGL 不可用，无法显示画面');
     }
     this.lastT = performance.now();
+    this.meter = resetMeter();
     const tick = (now: number): void => {
+      this.raf = requestAnimationFrame(tick);
       const dt = Math.min(0.1, (now - this.lastT) / 1000);
       this.lastT = now;
-      this.frames++;
-      this.fpsAcc += dt;
-      if (this.fpsAcc >= 0.5) {
-        this.fps = this.frames / this.fpsAcc;
-        this.frames = 0;
-        this.fpsAcc = 0;
-        this.ui.setFps(this.fps);
-      }
 
-      // 帧门控
+      // 帧门控：只有真正要渲染的帧才计入 FPS
       this.sinceRender += dt;
       const budget = this.s.targetFps > 0 ? 1 / this.s.targetFps - 0.0005 : 0;
       if (this.sinceRender >= budget) {
+        // ★ 消费的是【距上次渲染】的时间，而不是单个 rAF 帧的 dt。
+        //   120Hz 屏选 60 时两个 rAF 才渲染一次，若这里仍用单帧 dt，
+        //   游戏会以一半速度运行（移动变慢、射速变慢），
+        //   而且 FPS 会算成 120 —— 这正是"后台帧率跳到 120"的同类错误。
+        const gap = this.sinceRender;
         this.sinceRender = 0;
-        this.update(dt);
+        this.meter = pushRender(this.meter, gap);
+        if (this.meter.fps > 0) this.ui.setFps(this.meter.fps);
+        this.update(gap);
         this.render();
       }
-      this.raf = requestAnimationFrame(tick);
     };
+    this.tickFn = tick;
+    this.running = true;
     this.raf = requestAnimationFrame(tick);
+    this.bindVisibility();
+  }
+
+  /**
+   * ★ 切后台时暂停整个循环。
+   *   这既是省电，也修掉了"后台帧率跳变"：
+   *   页面隐藏后 rAF 的间隔不稳定（被节流或暂停），
+   *   回来那一帧的 dt 会异常巨大，混进统计就把读数带偏了。
+   */
+  private bindVisibility(): void {
+    if (this.visBound) return;
+    this.visBound = true;
+    this.onVis = () => {
+      if (document.hidden) {
+        if (this.raf) cancelAnimationFrame(this.raf);
+        this.raf = 0;
+        this.meter = resetMeter();
+      } else if (!this.raf && this.running) {
+        // 回来时重置时间基准，避免把后台那段时间算进 dt
+        this.lastT = performance.now();
+        this.sinceRender = 0;
+        this.meter = resetMeter();
+        this.raf = requestAnimationFrame(this.tickFn!);
+      }
+    };
+    document.addEventListener('visibilitychange', this.onVis);
   }
 
   stop(): void {
+    this.running = false;
     if (this.raf) cancelAnimationFrame(this.raf);
     this.raf = 0;
+    this.tickFn = null;
+    if (this.onVis) {
+      document.removeEventListener('visibilitychange', this.onVis);
+      this.onVis = null;
+    }
+    this.visBound = false;
     window.removeEventListener('resize', () => this.resize());
     if (this.renderer) this.renderer.dispose();
   }
@@ -374,7 +417,7 @@ export class SoloSession {
 
     // ---- 玩家模型 ----
     this.playerSoldier.root.position.set(this.p.pos.x, this.p.pos.y, this.p.pos.z);
-    this.playerSoldier.root.rotation.y = this.p.yaw + Math.PI;
+    this.playerSoldier.root.rotation.y = modelYaw(this.p.yaw);
     this.playerSoldier.root.visible = false;   // 第一人称隐藏自身
     animateSoldier(this.playerSoldier, this.animT, Math.hypot(this.p.vel.x, this.p.vel.z), this.p.grounded);
   }
@@ -399,7 +442,7 @@ export class SoloSession {
       const m = this.botMeshes.get(id);
       if (m) {
         m.root.position.set(r.bot.state.pos.x, r.bot.state.pos.y, r.bot.state.pos.z);
-        m.root.rotation.y = r.bot.state.yaw + Math.PI;
+        m.root.rotation.y = modelYaw(r.bot.state.yaw);
         animateSoldier(m, this.animT, Math.hypot(r.bot.state.vel.x, r.bot.state.vel.z), r.bot.state.grounded);
         // 倒地：放倒
         m.root.rotation.z = r.bot.phase === 'down' ? Math.PI / 2 : 0;

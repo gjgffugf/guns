@@ -162,12 +162,20 @@ test('★ 布局: 放大后各控件互不重叠', () => {
   }
 });
 
-test('布局: 治疗物与换弹在底部中间，不挡视野中心', () => {
+test('★ 布局: 治疗物与换弹靠右，不再压在准星正下方', () => {
   const cfg = defaultControls();
   const h = rectOf('heal', cfg.heal, BASE_W, BASE_H);
   const rl = rectOf('reload', cfg.reload, BASE_W, BASE_H);
   const cy = BASE_H / 2;
   assert.ok(h.y > cy, '治疗物应在屏幕下半部');
   assert.ok(rl.y > cy, '换弹应在屏幕下半部');
-  assert.ok(h.x < BASE_W / 2 && rl.x > BASE_W / 2, '两者应分居血条两侧');
+
+  // ★ 视野中心（准星）正下方应留空：两者都必须在中心右侧
+  const mid = BASE_W / 2;
+  assert.ok(h.x > mid, `治疗物左缘应在中线右侧，实为 ${h.x.toFixed(0)}`);
+  assert.ok(rl.x > h.x, '换弹应在治疗物右侧');
+
+  // 右侧按钮列起点之前，不能与跳跃键撞上
+  const jump = rectOf('jump', cfg.jump, BASE_W, BASE_H);
+  assert.ok(rl.x + rl.w <= jump.x, '换弹不能压到跳跃键');
 });

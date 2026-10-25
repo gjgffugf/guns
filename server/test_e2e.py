@@ -83,6 +83,19 @@ def main():
         # 用真实 WS 客户端验证 welcome 不含自己
         sys.path.insert(0, HERE)
         from test_ws import WS
+
+        # ★ query：不建号就能查人数（游戏外测延迟用）
+        q = WS(port=PORT)
+        q.send({"t": "query"})
+        m = q.recv(3.0)
+        ok(m is not None and m.get("t") == "info",
+           "★ query 返回 info（不建号）", str(m)[:70])
+        if m and m.get("t") == "info":
+            ok(m.get("online") == 0, "★ query 人数正确（此时无人）",
+               "%s/%s" % (m.get("online"), m.get("max")))
+        q.close()
+        time.sleep(0.3)
+
         a = WS(port=PORT)
         a.send({"t": "join", "name": "甲"})
         w = a.recv(3.0)
@@ -99,6 +112,14 @@ def main():
         inf = info()
         ok(inf is not None and inf.get("online") == 2,
            "★ 状态页人数与实际一致", str(inf))
+
+        # query 在有人的时候也要报对，且【不把自己算进去】
+        q2 = WS(port=PORT)
+        q2.send({"t": "query"})
+        m2 = q2.recv(3.0)
+        ok(m2 is not None and m2.get("online") == 2,
+           "★ query 不把自己算进人数", str(m2)[:70])
+        q2.close()
 
         # 甲断开，乙应看到甲消失
         a.close()
