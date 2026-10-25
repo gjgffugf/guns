@@ -10,6 +10,7 @@
 const dgram = require('node:dgram');
 const http = require('node:http');
 const crypto = require('node:crypto');
+const os = require('node:os');
 
 const SERVER_NAME = process.env.BB_NAME || '破绷战场';
 const PORT = Number(process.env.BB_PORT || 19000);
@@ -347,10 +348,34 @@ wsServer.listen(PORT, '0.0.0.0', () => {
   console.log(`WebSocket 监听 ws://0.0.0.0:${PORT}`);
 });
 
+/** ★ 列出局域网 IP —— 玩家要填的是这个，不是 127.0.0.1。
+ *
+ *  最常见的连不上其实是地址填错：在手机上开服、用另一台设备连，
+ *  却填了 127.0.0.1，那指向的是设备自己。启动就打印出来省得猜。
+ */
+function lanIPs() {
+  const out = [];
+  try {
+    const nets = os.networkInterfaces();
+    for (const list of Object.values(nets)) {
+      for (const n of list || []) {
+        if (n.family === 'IPv4' && !n.internal) out.push(n.address);
+      }
+    }
+  } catch { /* 忽略 */ }
+  return out;
+}
+
 server.on('listening', () => {
   const a = server.address();
   console.log(`破绷战场服务器已启动  UDP ${a.address}:${a.port}`);
   console.log(`最多 ${MAX_PLAYERS} 人，广播 ${1000 / TICK}Hz`);
+  const ips = lanIPs();
+  if (ips.length) {
+    console.log(`客户端地址填：${ips.map((i) => `${i}:${PORT}`).join(' 或 ')}`);
+  }
+  console.log(`本机自测可填：127.0.0.1:${PORT}`);
+  console.log(`端口：WS ${PORT}（TCP），状态页 ${HTTP_PORT}`);
 });
 
 server.bind(PORT, '0.0.0.0');

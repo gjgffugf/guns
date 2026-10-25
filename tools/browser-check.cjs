@@ -155,6 +155,24 @@ const ok = (c, name, extra = '') => {
       `滚了 ${scrollRes.after.scroll}px`);
   }
 
+  // ---- 6.7) 诊断函数：对不存在的服务器应给出明确结论 ----
+  // ★ "Failed to load resource" 这条 console 错误里【不含端口】，
+  //   没法按端口过滤；所以按时间窗处理：记录当前错误条数，
+  //   诊断造成的那几条之后直接删掉。
+  const errMark = errors.length;
+  const diag = await page.evaluate(async () => {
+    const d = window.__bbDiag;
+    if (!d) return null;
+    return await d('127.0.0.1', 59999, 1500);
+  });
+  if (diag) {
+    ok(diag.ws === false, '★ 诊断：连不上时 ws 判定为 false', diag.wsDetail);
+    ok(typeof diag.hint === 'string' && diag.hint.length > 8,
+      '★ 诊断：给出可读结论', diag.hint);
+    ok(diag.http === false, '★ 诊断：状态页同样不通', diag.httpDetail);
+  }
+  errors.splice(errMark);            // 丢弃诊断期间产生的预期错误
+
   await page.locator('#settings .close').click();
   await page.waitForTimeout(300);
   const closed = await page.locator('#settings').evaluate((e) => e.classList.contains('hidden'));
@@ -635,7 +653,9 @@ const ok = (c, name, extra = '') => {
   // ---- 14) 无 JS 报错 ----
   // 沙盒 headless chromium 禁用 WebGL，这是环境限制不是代码问题；
   // 开屏素材不存在导致的 404 也是预期内的（可选资源）。
-  const ignorable = /WebGL|SwiftShader|GroupMarker|Automatic fallback|GL_VENDOR|404/i;
+  // 59999 是诊断那一步【故意】连的不存在端口，ERR_CONNECTION_REFUSED 属预期。
+  // 诊断用 59999 端口，状态页会去 60000（= WS 端口 +1），两者都属预期失败。
+  const ignorable = /WebGL|SwiftShader|GroupMarker|Automatic fallback|GL_VENDOR|404|59999|60000/i;
   const real = errors.filter((e) => !ignorable.test(e));
   ok(real.length === 0, '无 JS 运行时错误', real.length ? real.slice(0, 3).join(' | ') : '');
 

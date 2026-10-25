@@ -90,6 +90,37 @@ export class MultiSession {
   private rtt = -1;
   private statusText = '';
 
+  /** 连接结果：'' = 还没结果，非空 = 失败原因 */
+  private connError = '';
+  /** onopen 后设为 true */
+  private ready = false;
+  private readyWaiters: Array<(ok: boolean) => void> = [];
+
+  /** 等待连接结果；超时或出错返回 false */
+  waitReady(timeoutMs = 6000): Promise<boolean> {
+    if (this.ready) return Promise.resolve(true);
+    if (this.connError) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      const t = window.setTimeout(() => {
+        this.connError = '连接超时（6 秒内没有响应）';
+        resolve(false);
+      }, timeoutMs);
+      this.readyWaiters.push((ok) => {
+        window.clearTimeout(t);
+        resolve(ok);
+      });
+    });
+  }
+
+  get connectError(): string { return this.connError; }
+
+  private settle(ok: boolean, err = ''): void {
+    this.ready = ok;
+    if (err) this.connError = err;
+    for (const w of this.readyWaiters) w(ok);
+    this.readyWaiters.length = 0;
+  }
+
   /** 全场总击杀（双方合计） */
   private totalKills = 0;
   private myKills = 0;
@@ -143,11 +174,25 @@ export class MultiSession {
       onStatus: (st, d) => {
         this.statusText = `${labelOf(st)}${d ? ' · ' + d : ''}`;
         this.ui.setTip(this.statusText);
-        if (st === 'error' || st === 'closed') this.ui.setNotice(this.statusText);
+        if (st === 'online') {
+          this.settle(true);
+        } else if (st === 'error') {
+          // ★ 把关闭码带上，1006 基本就是"根本没连出去"
+          const code = this.net.closeCode;
+          const tail = code > 0 ? `（关闭码 ${code}）` : '';
+          const why = code === 1006
+            ? '未发出连接：地址不可达，或 App 未允许明文流量'
+            : d;
+          this.ui.setNotice(`连接失败${tail} · ${why}`);
+          this.settle(false, why);
+        } else if (st === 'closed') {
+          this.settle(false, '已断开');
+        }
       },
       onWelcome: (id, players, max) => {
         this.myId = id;
         void max;
+        this.settle(true);
         this.ui.setNotice('');
         this.ui.setTip(`已连接 · ${players.length + 1} 人在房间`);
         for (const p of players) this.ensureRemote(p);

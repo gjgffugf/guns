@@ -8,6 +8,8 @@ export interface MenuHandlers {
   onSettings: () => void;
 }
 
+import type { DiagResult } from '../net/client';
+
 export interface SavedServer {
   name: string;
   host: string;
@@ -45,6 +47,7 @@ export class ServerPanel {
   private listEl: HTMLElement;
   private formEl: HTMLElement;
   private actEl: HTMLElement;
+  private diagEl: HTMLElement;
   private selected = -1;
   private servers: SavedServer[] = loadServers();
   /** 查询结果缓存：index -> {online, max, rtt, err} */
@@ -54,6 +57,7 @@ export class ServerPanel {
     parent: HTMLElement,
     private onConnect: (s: SavedServer) => void,
     private onQuery: (s: SavedServer) => Promise<{ online: number; max: number; rtt: number } | null>,
+    private onDiag: (s: SavedServer) => Promise<DiagResult | null>,
     onClose: () => void,
   ) {
     this.node = el('div', { class: 'layer hidden', id: 'servers' });
@@ -63,9 +67,10 @@ export class ServerPanel {
     this.listEl = el('div', { class: 'srvlist' });
     this.formEl = el('div', { class: 'srvform' });
     this.actEl = el('div', { class: 'srvact' });
+    this.diagEl = el('pre', { class: 'diag', text: '' });
 
     const close = btn('返回', 'btn', () => { this.hide(); onClose(); });
-    panel.append(this.listEl, this.formEl, this.actEl, close);
+    panel.append(this.listEl, this.formEl, this.actEl, this.diagEl, close);
     this.node.append(panel);
     parent.append(this.node);
     this.renderList();
@@ -144,7 +149,22 @@ export class ServerPanel {
     }));
   }
 
-  /** 选中项下方的按钮组：连接 / 刷新 / 编辑 / 删除 */
+  /** ★ 诊断：连不上时用它区分"服务器没开"和"被系统拦截" */
+  private async runDiag(sv: SavedServer): Promise<void> {
+    this.diagEl.textContent = `正在诊断 ${sv.host}:${sv.port} …`;
+    const r = await this.onDiag(sv);
+    if (!r) {
+      this.diagEl.textContent = '诊断失败';
+      return;
+    }
+    this.diagEl.textContent =
+      `游戏端口(WS)：${r.ws ? '通' : '不通'} —— ${r.wsDetail}\n`
+      + `状态页(HTTP)：${r.http ? '通' : '不通'} —— ${r.httpDetail}\n`
+      + (r.online >= 0 ? `在线人数：${r.online}/${r.max}\n` : '')
+      + `\n结论：${r.hint}`;
+  }
+
+  /** 选中项下方的按钮组：连接 / 刷新延迟 / 诊断 / 编辑 / 删除 */
   private renderActs(): void {
     while (this.actEl.firstChild) this.actEl.removeChild(this.actEl.firstChild);
     if (this.selected < 0 || this.selected >= this.servers.length) return;
@@ -152,6 +172,7 @@ export class ServerPanel {
     this.actEl.append(
       btn('连接', 'btn primary', () => { this.hide(); this.onConnect(sv); }),
       btn('刷新延迟', 'btn', () => { void this.refreshAll(); }),
+      btn('★ 诊断', 'btn', () => { void this.runDiag(sv); }),
       btn('编辑', 'btn', () => this.renderForm(sv)),
       btn('删除', 'btn danger', () => {
         this.servers.splice(this.selected, 1);
@@ -178,7 +199,7 @@ export class MainMenu {
     left.append(
       el('div', { class: 'title', text: '破绷战场' }),
       el('div', { class: 'sub', text: 'B R E A K B I N D   B A T T L E F I E L D' }),
-      el('div', { class: 'foot', text: 'xfan.games.gun   v0.2.4' }),
+      el('div', { class: 'foot', text: 'xfan.games.gun   v0.2.5' }),
     );
 
     const right = el('div', { class: 'right' });

@@ -2,7 +2,7 @@
  * 调整 Android 工程：横屏锁定、沉浸全屏、硬件加速。
  * 用法：node tools/setup-android.mjs [android目录]
  */
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 const ANDROID = process.argv[2] || 'android';
@@ -53,7 +53,67 @@ if (!m.includes('android:hardwareAccelerated')) {
   }
 }
 
-// ---- 3) 网络权限（多人联机需要）----
+// ---- 3) 明文流量放行（★ 多人联机连不上的头号原因）----
+//
+//   Android 9（API 28）起，系统【默认禁止所有明文流量】：
+//     http:// 请求 和 ws:// 连接都会被网络层直接掐掉。
+//   Capacitor 6 的 targetSdk 早已超过 28，所以：
+//     - 连 ws://192.168.x.x:19000  → 失败
+//     - 连 ws://127.0.0.1:19000    → 同样失败（loopback 没有任何豁免）
+//   这解释了"手机上开服也连不上"：地址没错、服务器也在跑，
+//   但 App 根本没发出 TCP 包。
+//
+//   ★ 更难排查的地方：从 JS 侧看，这种拦截和"服务器没开"完全一样 ——
+//     WebSocket 构造函数不抛异常，close code 恒为 1006。
+//   所以必须在这里修，光看客户端日志是看不出来的。
+//
+//   这里同时给出两种写法：
+//     a) usesCleartextTraffic="true"  —— 兜底，即使 xml 没被打包进去也有效
+//     b) network_security_config      —— 更规范，且生效时优先于 a)
+const NS_CONFIG = 'network_security_config';
+if (!m.includes('usesCleartextTraffic')) {
+  const appRe2 = /<application\b[^>]*>/;
+  const apm2 = m.match(appRe2);
+  if (apm2) {
+    m = m.replace(appRe2, apm2[0].replace(/>$/, ' android:usesCleartextTraffic="true">'));
+    changed = true;
+    console.log('已允许明文流量 usesCleartextTraffic=true（ws:// 联机必需）');
+  }
+}
+if (!m.includes(NS_CONFIG)) {
+  const appRe3 = /<application\b[^>]*>/;
+  const apm3 = m.match(appRe3);
+  if (apm3) {
+    m = m.replace(appRe3, apm3[0].replace(/>$/, ` android:networkSecurityConfig="@xml/${NS_CONFIG}">`));
+    changed = true;
+    console.log(`已引用 @xml/${NS_CONFIG}`);
+  }
+}
+
+// ---- 3b) 生成 network_security_config.xml ----
+const XML_DIR = path.join(ANDROID, 'app', 'src', 'main', 'res', 'xml');
+const NS_FILE = path.join(XML_DIR, `${NS_CONFIG}.xml`);
+if (!existsSync(XML_DIR)) {
+  mkdirSync(XML_DIR, { recursive: true });
+  console.log(`已创建目录 ${XML_DIR}`);
+}
+writeFileSync(NS_FILE, `<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ★ 允许明文（ws:// / http://）流量。
+
+  联机服务器地址是玩家自己填的，可能是局域网 IP、127.0.0.1 或内网域名，
+  无法预先写死白名单，所以这里用 base-config 整体放行。
+
+  Android 9+ 默认禁止明文流量，且【loopback 也没有豁免】——
+  不开这个，ws://127.0.0.1 一样连不上。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
+`, 'utf8');
+console.log(`已写入 ${NS_FILE}`);
+
+// ---- 3c) 网络权限（多人联机需要）----
 if (!m.includes('android.permission.INTERNET')) {
   m = m.replace(
     /(<manifest[^>]*>)/,
@@ -219,6 +279,19 @@ if (!finalM.includes('sensorLandscape')) {
 }
 if (!finalM.includes('android.permission.INTERNET')) {
   console.error('自检失败：缺少网络权限');
+  process.exit(1);
+}
+// ★ 明文流量自检：漏了这一项，多人联机在真机上必定连不上
+if (!finalM.includes('usesCleartextTraffic')) {
+  console.error('自检失败：未允许明文流量，ws:// 会被 Android 拦截');
+  process.exit(1);
+}
+if (!finalM.includes(NS_CONFIG)) {
+  console.error('自检失败：未引用 network_security_config');
+  process.exit(1);
+}
+if (!existsSync(NS_FILE)) {
+  console.error(`自检失败：缺少 ${NS_FILE}`);
   process.exit(1);
 }
 if (existsSync(STYLES)) {

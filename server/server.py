@@ -340,7 +340,7 @@ def ws_server():
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind(("0.0.0.0", PORT))
     srv.listen(64)
-    print("WebSocket 监听 tcp://0.0.0.0:%d" % PORT)
+    print("WebSocket 监听 tcp://0.0.0.0:%d" % PORT, flush=True)
     while True:
         try:
             conn, addr = srv.accept()
@@ -363,7 +363,7 @@ udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
 def udp_server():
     udp_sock.bind(("0.0.0.0", PORT))
-    print("UDP 监听 udp://0.0.0.0:%d" % PORT)
+    print("UDP 监听 udp://0.0.0.0:%d" % PORT, flush=True)
     while True:
         try:
             raw, addr = udp_sock.recvfrom(65535)
@@ -403,7 +403,7 @@ def http_server():
         print("HTTP 状态页启动失败：%s" % e)
         return
     srv.listen(16)
-    print("HTTP 状态页 http://0.0.0.0:%d/info" % HTTP_PORT)
+    print("HTTP 状态页 http://0.0.0.0:%d/info" % HTTP_PORT, flush=True)
     while True:
         try:
             conn, _ = srv.accept()
@@ -466,9 +466,40 @@ def ticker():
             print("[ticker] %s" % e)
 
 
+def lan_ips():
+    """列出本机局域网 IP —— 玩家要填的就是这个，不是 127.0.0.1。
+
+    ★ 最常见的连不上原因其实是【地址填错】：
+      在手机上开服、用另一台设备连，却填了 127.0.0.1 或 localhost，
+      那指向的是设备自己。所以启动时直接把可用地址打印出来。
+    """
+    out = []
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))          # 不会真的发包，只用来选出网网卡
+        out.append(s.getsockname()[0])
+        s.close()
+    except Exception:
+        pass
+    try:
+        out.append(socket.gethostbyname(socket.gethostname()))
+    except Exception:
+        pass
+    # 去重并保持顺序
+    seen = set()
+    return [x for x in out if not (x in seen or seen.add(x))]
+
+
 def main():
-    print("破绷战场 服务器启动")
-    print("  名称：%s    最大人数：%d" % (SERVER_NAME, MAX_PLAYERS))
+    # ★ 加 flush=True：stdout 被重定向到文件或管道时 Python 会缓冲，
+    #   不刷新的话"地址填什么"这行关键信息要等很久才出现。
+    print("破绷战场 服务器启动", flush=True)
+    print("  名称：%s    最大人数：%d" % (SERVER_NAME, MAX_PLAYERS), flush=True)
+    ips = lan_ips()
+    if ips:
+        print("  客户端地址填：" + " 或 ".join("%s:%d" % (i, PORT) for i in ips), flush=True)
+    print("  本机自测可填：127.0.0.1:%d" % PORT, flush=True)
+    print("  端口：WS/UDP %d，状态页 %d" % (PORT, HTTP_PORT), flush=True)
     for t, args in ((udp_server, ()), (ws_server, ()), (http_server, ()), (ticker, ())):
         threading.Thread(target=t, args=args, daemon=True).start()
     try:

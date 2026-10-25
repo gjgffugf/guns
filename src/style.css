@@ -442,3 +442,10 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 }
 #servers .srvact { display: flex; gap: 8px; flex-wrap: wrap; }
 #servers .btn.danger { border-color: rgba(255,120,110,.8); background: rgba(120,26,26,.9); }
+
+#servers .diag {
+  margin: 0; padding: 10px; border-radius: 8px;
+  background: rgba(0,0,0,.45); color: #cfe0ff;
+  font-size: 13px; line-height: 1.6; white-space: pre-wrap;
+  max-height: 26vh; overflow-y: auto;
+}

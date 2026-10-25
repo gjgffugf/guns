@@ -9,7 +9,7 @@ import { TouchControls, type CtrlEvent, type LookEvent } from './input/controls'
 import { SoloSession } from './game/session';
 import { MultiSession } from './game/multi';
 import { ServerPanel, type SavedServer } from './ui/menu';
-import { queryServer } from './net/client';
+import { queryServer, diagnose } from './net/client';
 import { HEAL_DEFS, type HealState } from './game/heal';
 import { load, save, defaultSettings, type Settings } from './core/settings';
 import { sfx } from './core/sfx';
@@ -121,6 +121,7 @@ function openServers(): void {
         const r = await queryServer(sv.host, sv.port);
         return r ? { online: r.info.online, max: r.info.max, rtt: r.rtt } : null;
       },
+      async (sv) => diagnose(sv.host, sv.port),
       () => { /* 返回主菜单 */ },
     );
   }
@@ -154,6 +155,22 @@ async function startMulti(sv: SavedServer): Promise<void> {
     session = new MS(canvas, makeSessionUI(), settings, {
       host: sv.host, port: sv.port, name: settings.playerName || '玩家',
     });
+
+    // ★ 先进房间再开打：连不上就退回菜单并说明原因，
+    //   否则会进到一个"只有自己"的空房间，看起来像单机，很难发现是连不上。
+    loading.setProgress(0.85);
+    const okc = await (session as MultiSession).waitReady(6000);
+    if (!okc) {
+      const why = (session as MultiSession).connectError || '未知原因';
+      session.stop();
+      session = null;
+      hud.close();
+      menu.open();
+      menu.toast(`连接失败：${why}\n请在服务器列表点“诊断”查看原因`);
+      loading.close();
+      return;
+    }
+
     session.start();
     bindControls();
     syncHeal(session.healState);
@@ -355,6 +372,7 @@ boot().catch((err) => {
 });
 
 // 便于调试 / 自动化验证（浏览器测试脚本靠它读游戏内部状态）
+(window as unknown as { __bbDiag?: unknown }).__bbDiag = diagnose;
 interface DebugHook { session: SoloSession | MultiSession | null }
 (window as unknown as { __bb?: DebugHook }).__bb = {
   get session(): SoloSession | MultiSession | null { return session; },
