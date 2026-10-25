@@ -50,8 +50,8 @@ test('布局: 开火键恒在右下角，比例不随分辨率漂移', () => {
     const r = rectOf('fire', cfg.fire, d.vw, d.vh);
     const cx = (r.x + r.w / 2) / d.vw;
     const cy = (r.y + r.h / 2) / d.vh;
-    assert.ok(Math.abs(cx - 0.9344) < 0.01, `${d.name} 横向占比=${cx.toFixed(3)}`);
-    assert.ok(Math.abs(cy - 0.9028) < 0.01, `${d.name} 纵向占比=${cy.toFixed(3)}`);
+    assert.ok(Math.abs(cx - 0.8950) < 0.01, `${d.name} 横向占比=${cx.toFixed(3)}`);
+    assert.ok(Math.abs(cy - 0.8450) < 0.01, `${d.name} 纵向占比=${cy.toFixed(3)}`);
   }
 });
 
@@ -143,4 +143,31 @@ test('夹取: 基准尺寸自洽（最大控件也不超过屏幕的 1/3 宽）'
     assert.ok(w <= BASE_W / 3, `${k} 太宽 ${w}`);
     assert.ok(h <= BASE_H / 1.5, `${k} 太高 ${h}`);
   }
+});
+
+
+test('★ 布局: 放大后各控件互不重叠', () => {
+  const cfg = defaultControls();
+  const rs: Array<{ k: ControlKey; r: Rect }> =
+    CONTROL_KEYS.map((k) => ({ k, r: rectOf(k, cfg[k], BASE_W, BASE_H) }));
+  for (let i = 0; i < rs.length; i++) {
+    for (let j = i + 1; j < rs.length; j++) {
+      const a = rs[i].r;
+      const b = rs[j].r;
+      const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+      const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+      assert.ok(ox <= 0 || oy <= 0,
+        `${rs[i].k} 与 ${rs[j].k} 重叠了（${ox.toFixed(0)}x${oy.toFixed(0)}px）`);
+    }
+  }
+});
+
+test('布局: 治疗物与换弹在底部中间，不挡视野中心', () => {
+  const cfg = defaultControls();
+  const h = rectOf('heal', cfg.heal, BASE_W, BASE_H);
+  const rl = rectOf('reload', cfg.reload, BASE_W, BASE_H);
+  const cy = BASE_H / 2;
+  assert.ok(h.y > cy, '治疗物应在屏幕下半部');
+  assert.ok(rl.y > cy, '换弹应在屏幕下半部');
+  assert.ok(h.x < BASE_W / 2 && rl.x > BASE_W / 2, '两者应分居血条两侧');
 });

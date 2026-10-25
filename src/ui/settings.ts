@@ -35,6 +35,10 @@ export class SettingsPanel {
   private sizeSlider: HTMLInputElement | null = null;
   private alphaSlider: HTMLInputElement | null = null;
   private tipEl: HTMLElement | null = null;
+  /** 右侧滚动条 */
+  private scroller: HTMLElement;
+  private scrollThumb: HTMLElement;
+  private scrollDrag: { pointerId: number; startY: number; baseTop: number; travel: number } | null = null;
   /** 控件拖动状态（挂在 window 上，避免手指滑出元素后丢失事件） */
   private drag: {
     key: ControlKey; pointerId: number;
@@ -59,9 +63,21 @@ export class SettingsPanel {
     tabCol.append(close);
 
     this.body = el('div', { class: 'body' });
-    panel.append(tabCol, this.body);
+
+    // 右侧滚动条（内容超出时可长按拖动）
+    this.scroller = el('div', { class: 'scroller' });
+    this.scrollThumb = el('div', { class: 'scroll-thumb' });
+    this.scroller.append(this.scrollThumb);
+    this.bindScroller();
+
+    panel.append(tabCol, this.body, this.scroller);
     this.node.append(panel);
     parent.append(this.node);
+
+    // 滚动条拖动：同样挂 window，长按后可以一路滑到底
+    window.addEventListener('pointermove', this.onScrollMove, { passive: false });
+    window.addEventListener('pointerup', this.onScrollEnd);
+    window.addEventListener('pointercancel', this.onScrollEnd);
 
     // 拖动全程在 window 上接收：手指移出代理元素也照样跟手
     window.addEventListener('pointermove', this.onDragMove, { passive: false });
@@ -69,6 +85,69 @@ export class SettingsPanel {
     window.addEventListener('pointercancel', this.onDragEnd);
 
     this.select(0);
+  }
+
+  // ---------------- 右侧滚动条 ----------------
+  /** 绑定滚动条事件 */
+  private bindScroller(): void {
+    // 拖动（pointerdown 后保持按住并上下滑）
+    this.scrollThumb.addEventListener('pointerdown', (ev: PointerEvent) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const box = this.scroller.getBoundingClientRect();
+      const tb = this.scrollThumb.getBoundingClientRect();
+      this.scrollDrag = {
+        pointerId: ev.pointerId,
+        startY: ev.clientY,
+        baseTop: tb.top - box.top,
+        travel: Math.max(1, box.height - tb.height),
+      };
+      this.scrollThumb.classList.add('dragging');
+    });
+
+    // 内容滚动 / 尺寸变化时同步滑块位置
+    this.body.addEventListener('scroll', () => this.syncScrollThumb());
+    if (typeof ResizeObserver !== 'undefined') {
+      new ResizeObserver(() => this.syncScrollThumb()).observe(this.body);
+    }
+  }
+
+  private onScrollMove = (ev: PointerEvent): void => {
+    const d = this.scrollDrag;
+    if (!d || ev.pointerId !== d.pointerId) return;
+    ev.preventDefault();
+    const dy = ev.clientY - d.startY;
+    const top = Math.max(0, Math.min(d.travel, d.baseTop + dy));
+    const ratio = d.travel > 0 ? top / d.travel : 0;
+    const max = this.body.scrollHeight - this.body.clientHeight;
+    this.body.scrollTop = ratio * max;
+    this.syncScrollThumb();
+  };
+
+  private onScrollEnd = (ev: PointerEvent): void => {
+    const d = this.scrollDrag;
+    if (!d || ev.pointerId !== d.pointerId) return;
+    this.scrollDrag = null;
+    this.scrollThumb.classList.remove('dragging');
+  };
+
+  /** 按当前滚动位置摆放滑块；内容没超出就整条隐藏 */
+  private syncScrollThumb(): void {
+    const b = this.body;
+    const view = b.clientHeight;
+    const total = b.scrollHeight;
+    const max = total - view;
+    if (max <= 2) {
+      this.scroller.style.display = 'none';
+      return;
+    }
+    this.scroller.style.display = 'block';
+    const boxH = this.scroller.clientHeight || view;
+    const th = Math.max(28, boxH * (view / total));
+    const travel = Math.max(1, boxH - th);
+    const ratio = Math.max(0, Math.min(1, b.scrollTop / max));
+    this.scrollThumb.style.height = `${th}px`;
+    this.scrollThumb.style.top = `${ratio * travel}px`;
   }
 
   private onDragMove = (ev: PointerEvent): void => {
@@ -113,6 +192,9 @@ export class SettingsPanel {
     else if (this.page === 1) this.renderCross();
     else if (this.page === 2) this.renderControls();
     else this.renderAbout();
+    this.body.scrollTop = 0;
+    // 等一帧让容器完成布局，再按实际内容高度摆放滑块
+    requestAnimationFrame(() => this.syncScrollThumb());
   }
 
   // ---------------- 通用 ----------------

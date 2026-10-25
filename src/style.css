@@ -127,6 +127,30 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 #settings .tabs { width: 190px; display: flex; flex-direction: column; gap: 10px; }
 #settings .tabs button { padding: 14px 10px; font-size: 19px; }
 #settings .tabs button.on { background: rgba(178,32,36,.9); border-color: rgba(255,255,255,.8); }
+/* 设置：右侧可长按拖动的滚动条 */
+#settings .scroller {
+  position: relative;
+  width: 16px; align-self: stretch;
+  margin-left: 6px;
+  border-radius: 8px;
+  background: rgba(255,255,255,.08);
+  touch-action: none;
+  display: none;
+  flex: 0 0 auto;
+}
+#settings .scroll-thumb {
+  position: absolute; left: 2px; right: 2px;
+  border-radius: 6px;
+  background: rgba(255,255,255,.55);
+  border: 1px solid rgba(255,255,255,.8);
+  cursor: grab;
+  touch-action: none;
+}
+#settings .scroll-thumb.dragging {
+  background: rgba(255,255,255,.9);
+  cursor: grabbing;
+}
+
 #settings .body { flex: 1; overflow-y: auto; padding-right: 6px; }
 #settings .row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
 #settings .row > label { min-width: 104px; font-size: 15px; color: #b9c2d6; }
@@ -371,3 +395,50 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   box-shadow: 0 0 0 2px rgba(255,107,90,.35);
 }
 #settings .proxy.dragging { cursor: grabbing; opacity: .92; }
+
+/* 能量饮料倒计时：左上角 FPS 正下方 */
+.bufftimer {
+  position: absolute;
+  left: calc(12px + env(safe-area-inset-left, 0px));
+  top: calc(42px + env(safe-area-inset-top, 0px));
+  padding: 3px 9px; border-radius: 10px;
+  background: rgba(12,40,26,.75);
+  border: 1px solid rgba(120,255,180,.5);
+  color: #8bffc0; font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 2px 4px #000;
+  pointer-events: none;
+}
+
+/* ---------------- 服务器列表 ---------------- */
+#servers .panel {
+  width: min(760px, 92vw); max-height: 92vh;
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 16px; border-radius: 14px;
+  background: rgba(12,15,22,.96);
+  border: 2px solid rgba(255,255,255,.16);
+}
+#servers .hd { font-size: 20px; color: #e9eef8; }
+#servers .srvlist {
+  display: flex; flex-direction: column; gap: 6px;
+  max-height: 40vh; overflow-y: auto;
+}
+#servers .srvrow {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px; border-radius: 10px;
+  border: 2px solid rgba(255,255,255,.3);
+  background: rgba(22,27,38,.9); color: #e9eef8; font-size: 15px;
+  text-align: left;
+}
+#servers .srvrow.on { border-color: #ff6b5a; background: rgba(60,26,26,.92); }
+#servers .srvrow .sn { flex: 0 0 30%; font-weight: 600; }
+#servers .srvrow .sh { flex: 1; color: #9fb0cc; font-size: 13px; }
+#servers .srvrow .ss { flex: 0 0 auto; color: #8bffc0; font-size: 13px; }
+#servers .srvform { display: flex; flex-direction: column; gap: 6px; }
+#servers .srvform input {
+  flex: 1; padding: 8px 10px; border-radius: 8px;
+  border: 2px solid rgba(255,255,255,.28);
+  background: rgba(0,0,0,.35); color: #e9eef8; font-size: 15px;
+}
+#servers .srvact { display: flex; gap: 8px; flex-wrap: wrap; }
+#servers .btn.danger { border-color: rgba(255,120,110,.8); background: rgba(120,26,26,.9); }

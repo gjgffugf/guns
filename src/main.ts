@@ -7,6 +7,9 @@ import { SettingsPanel } from './ui/settings';
 import { Hud } from './ui/hud';
 import { TouchControls, type CtrlEvent, type LookEvent } from './input/controls';
 import { SoloSession } from './game/session';
+import { MultiSession } from './game/multi';
+import { ServerPanel, type SavedServer } from './ui/menu';
+import { queryServer } from './net/client';
 import { HEAL_DEFS, type HealState } from './game/heal';
 import { load, save, defaultSettings, type Settings } from './core/settings';
 import { sfx } from './core/sfx';
@@ -58,7 +61,7 @@ function detectRefreshHz(): number {
 const loading = new LoadingScreen(app);
 const menu = new MainMenu(app, {
   onSolo: () => startSolo(),
-  onMulti: () => menu.toast('多人模式将在后续版本开放'),
+  onMulti: () => openServers(),
   onRoom: () => menu.toast('开房间功能暂未开放'),
   onSettings: () => settingsPanel.open(),
 }, settings);
@@ -70,7 +73,8 @@ const settingsPanel = new SettingsPanel(app, settings, {
 });
 
 let hud: Hud | null = null;
-let session: SoloSession | null = null;
+let session: SoloSession | MultiSession | null = null;
+let serversPanel: ServerPanel | null = null;
 let controls: TouchControls | null = null;
 
 function applySettings(): void {
@@ -108,6 +112,85 @@ async function boot(): Promise<void> {
 }
 
 // ---------------- 单人游戏 ----------------
+function openServers(): void {
+  if (!serversPanel) {
+    serversPanel = new ServerPanel(
+      app,
+      (sv) => { void startMulti(sv); },
+      async (sv) => {
+        const r = await queryServer(sv.host, sv.port);
+        return r ? { online: r.info.online, max: r.info.max, rtt: r.rtt } : null;
+      },
+      () => { /* 返回主菜单 */ },
+    );
+  }
+  serversPanel.show();
+}
+
+async function startMulti(sv: SavedServer): Promise<void> {
+  loading.open();
+  loading.setProgress(0.3);
+  try {
+    const { MultiSession: MS } = await import('./game/multi');
+    const canvas = document.getElementById('gl') as HTMLCanvasElement | null;
+    if (!canvas) throw new Error('找不到画布');
+
+    menu.close();
+    loading.setProgress(0.7);
+
+    if (!hud) {
+      hud = new Hud(app, {
+        onExit: () => exitGame(),
+        onHealUse: () => session?.useHeal(),
+        onHealToggle: () => session?.toggleHealList(),
+        onHealPick: (k) => session?.pickHeal(k),
+        onHealCancel: () => session?.cancelHeal(),
+      }, settings);
+    }
+    hud.open();
+    hud.drawCrosshair(settings);
+    hud.layoutHeal(settings.controls.heal);
+
+    session = new MS(canvas, makeSessionUI(), settings, {
+      host: sv.host, port: sv.port, name: settings.playerName || '玩家',
+    });
+    session.start();
+    bindControls();
+    syncHeal(session.healState);
+    loading.setProgress(1);
+    loading.close();
+  } catch (err) {
+    console.error('[startMulti] 连接失败', err);
+    loading.close();
+    menu.open();
+    menu.toast(`连接失败：${(err as Error).message}`);
+    if (session) { try { session.stop(); } catch { /* 忽略 */ } session = null; }
+  }
+}
+
+/** HUD 回调集合（单人与多人共用） */
+function makeSessionUI(): import('./game/session').SessionUI {
+  return {
+    setFps: (f) => hud?.setFps(f),
+    setScore: (t) => hud?.setScore(t),
+    setStance: (t) => hud?.setStance(t),
+    setHp: (a, b) => hud?.setHp(a, b),
+    setAmmo: (a, r, m) => hud?.setAmmo(a, r, m),
+    setTip: (t) => hud?.setTip(t),
+    setNotice: (t) => hud?.setNotice(t),
+    setCenter: (t) => hud?.setCenter(t),
+    pushKill: (m) => hud?.pushKill(m),
+    setAds: (on) => hud?.setAds(on),
+    onHit: (head) => hud?.showHit(head),
+    onMuzzle: () => hud?.flashMuzzle(),
+    onHurt: () => hud?.flashHurt(),
+    onHealChange: (h) => syncHeal(h),
+    setHealTimer: () => { /* 倒计时走 setCenter */ },
+    setBuff: (left) => hud?.setBuff(left),
+    setCancel: (on, cb) => hud?.setCancel(on, cb),
+  };
+}
+
 async function startSolo(): Promise<void> {
   menu.close();
   loading.open();
@@ -142,6 +225,7 @@ async function startSolo(): Promise<void> {
     onHurt: () => hud?.flashHurt(),
     onHealChange: (h) => syncHeal(h),
     setHealTimer: () => { /* 倒计时走 setCenter */ },
+    setBuff: (left) => hud?.setBuff(left),
   }, settings);
 
   loading.setProgress(1);
@@ -271,9 +355,9 @@ boot().catch((err) => {
 });
 
 // 便于调试 / 自动化验证（浏览器测试脚本靠它读游戏内部状态）
-interface DebugHook { session: SoloSession | null }
+interface DebugHook { session: SoloSession | MultiSession | null }
 (window as unknown as { __bb?: DebugHook }).__bb = {
-  get session(): SoloSession | null { return session; },
+  get session(): SoloSession | MultiSession | null { return session; },
 };
 
 void defaultSettings;

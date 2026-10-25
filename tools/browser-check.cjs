@@ -98,6 +98,63 @@ const ok = (c, name, extra = '') => {
   }
 
   // ---- 6) 关闭设置 ----
+  // ---- 6.6) 设置页右侧滚动条：长按后可上下拖动 ----
+  const scrollRes = await page.evaluate(async () => {
+    const sc = document.querySelector('#settings .scroller');
+    const th = document.querySelector('#settings .scroll-thumb');
+    const body = document.querySelector('#settings .body');
+    if (!sc || !th || !body) return null;
+    // ★ 720 高的窗口里内容不一定超出，滚动条会隐藏。
+    //   这里临时塞一段占位内容逼出滚动，测完再移除；
+    //   否则这项验证会被静默跳过 —— 等于没测。
+    const filler = document.createElement('div');
+    filler.style.height = '900px';
+    filler.textContent = '（占位）';
+    body.append(filler);
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    await new Promise((r) => setTimeout(r, 80));
+    const before = { top: th.style.top, scroll: body.scrollTop };
+    const tb = th.getBoundingClientRect();
+    const startY = tb.top + tb.height / 2;
+    th.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, cancelable: true, pointerId: 21, pointerType: 'touch',
+      clientX: tb.x + tb.width / 2, clientY: startY,
+    }));
+    for (let i = 1; i <= 8; i++) {
+      window.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true, cancelable: true, pointerId: 21, pointerType: 'touch',
+        clientX: tb.x + tb.width / 2, clientY: startY + i * 6,
+      }));
+      await new Promise((r) => setTimeout(r, 16));
+    }
+    const after = { top: th.style.top, scroll: body.scrollTop };
+    window.dispatchEvent(new PointerEvent('pointerup', {
+      bubbles: true, cancelable: true, pointerId: 21, pointerType: 'touch',
+      clientX: tb.x + tb.width / 2, clientY: startY + 48,
+    }));
+    const res = {
+      before, after,
+      visible: getComputedStyle(sc).display,
+      scrollable: body.scrollHeight > body.clientHeight + 2,
+      thumbH: th.getBoundingClientRect().height,
+    };
+    filler.remove();
+    return res;
+  });
+  if (scrollRes) {
+    ok(scrollRes.visible === 'block',
+      '★ 设置页滚动条在内容超出时显示',
+      `display=${scrollRes.visible} 滑块高 ${scrollRes.thumbH.toFixed(0)}px`);
+    ok(scrollRes.thumbH >= 28,
+      '★ 滑块有可见高度（不是一条细线）', `${scrollRes.thumbH.toFixed(0)}px`);
+    ok(scrollRes.after.scroll > scrollRes.before.scroll,
+      '★ 长按滚动条并上下滑动可滚动栏目',
+      `scrollTop ${scrollRes.before.scroll} -> ${scrollRes.after.scroll}`);
+    ok(scrollRes.after.scroll > 20,
+      '★ 一次连续拖动可以滚很远（不是只挪一小段）',
+      `滚了 ${scrollRes.after.scroll}px`);
+  }
+
   await page.locator('#settings .close').click();
   await page.waitForTimeout(300);
   const closed = await page.locator('#settings').evaluate((e) => e.classList.contains('hidden'));
@@ -467,9 +524,12 @@ const ok = (c, name, extra = '') => {
       const d = Math.hypot(healPos.wrap.cx - healPos.hit.cx, healPos.wrap.cy - healPos.hit.cy);
       ok(d < 4, '★ 治疗按钮与"治疗物"控件位置重合',
         `偏差 ${d.toFixed(1)}px @(${healPos.wrap.cx.toFixed(0)}, ${healPos.wrap.cy.toFixed(0)})`);
-      // 不在屏幕正中
-      const offCenter = Math.abs(healPos.wrap.cx - healPos.vw / 2);
-      ok(offCenter > 100, '★ 治疗按钮不在屏幕正中央', `距中心 ${offCenter.toFixed(0)}px`);
+      // ★ 按截图布局，治疗物在底部偏左（血条左侧），不该盖住屏幕正中。
+      //   判据用"按钮矩形是否覆盖屏幕中心点"，比"距中心多少像素"更准确。
+      const mid = healPos.vw / 2;
+      const covers = healPos.wrap.x < mid && healPos.wrap.x + healPos.w > mid;
+      ok(!covers, '★ 治疗按钮不在屏幕正中央',
+        `按钮 ${healPos.wrap.x.toFixed(0)}~${(healPos.wrap.x + healPos.w).toFixed(0)}，中心 ${mid}`);
       ok(parseFloat(healPos.hitOpacity) === 0, '★ 底层命中框透明（不出现第二个可见按钮）',
         `opacity=${healPos.hitOpacity}`);
     }

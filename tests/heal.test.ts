@@ -18,7 +18,7 @@ test('治疗: 初始携带数量正确（绷带3 / 急救包1 / 饮料2）', () 
   assert.equal(h.inv.energy, 2);
 });
 
-test('治疗: 绷带 5 秒后恢复 40 点并消耗一个', () => {
+test('治疗: 绷带 4 秒后恢复 70 点并消耗一个', () => {
   let h = createHeal();
   h = beginUse(h, 'bandage', 50, 100);
   assert.ok(isBusy(h), '应进入使用中状态');
@@ -30,8 +30,9 @@ test('治疗: 绷带 5 秒后恢复 40 点并消耗一个', () => {
     if (r.finished) healed = r.healAmount;
   }
   assert.equal(h.inv.bandage, 2, '应消耗一个绷带');
-  assert.equal(healed, 40);
-  assert.equal(applyHeal(50, 100, healed, false), 90);
+  assert.equal(healed, 70, '绷带应恢复 70 点');
+  assert.equal(applyHeal(50, 100, healed, false), 100);
+  assert.equal(applyHeal(20, 100, healed, false), 90);
 });
 
 test('治疗: 急救包 7 秒回满', () => {
@@ -106,14 +107,14 @@ test('治疗: 恢复量不会超过上限', () => {
 test('治疗: 倒计时单调递减', () => {
   let h = createHeal();
   h = beginUse(h, 'bandage', 50, 100);
-  assert.equal(h.left, 5);
+  assert.equal(h.left, 4, '绷带应为 4 秒');
   let prev = h.left;
   for (let i = 0; i < 10; i++) {
     h = tickHeal(h, 0.1, 50, 100).state;
     assert.ok(h.left <= prev, '不应增加');
     prev = h.left;
   }
-  assert.ok(Math.abs(prev - 4) < 1e-6, `1 秒后应剩 4，实际 ${prev}`);
+  assert.ok(Math.abs(prev - 3) < 1e-6, `1 秒后应剩 3，实际 ${prev}`);
 });
 
 // ---------------- 子弹不穿墙 ----------------
@@ -231,7 +232,7 @@ test('治疗: 三种物品定义齐全', () => {
   assert.equal(HEAL_DEFS.bandage.name, '破损的绷带');
   assert.equal(HEAL_DEFS.medkit.name, '布满灰的急救包');
   assert.equal(HEAL_DEFS.energy.name, '冰冰冰');
-  assert.equal(HEAL_DEFS.bandage.time, 5);
+  assert.equal(HEAL_DEFS.bandage.time, 4);
   assert.equal(HEAL_DEFS.medkit.time, 7);
   assert.equal(HEAL_DEFS.energy.time, 4);
 });

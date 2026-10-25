@@ -48,6 +48,8 @@ export interface SessionUI {
   onHealChange(h: HealState): void;
   /** 使用中的倒计时文本；空表示隐藏 */
   setHealTimer(t: string): void;
+  /** 能量饮料剩余秒数；<=0 隐藏 */
+  setBuff(left: number): void;
   /** 显示 / 隐藏"取消"按钮 */
   setCancel(on: boolean, cb?: () => void): void;
 }
@@ -419,10 +421,12 @@ export class SoloSession {
       this.ui.setTip(d.buff > 0 ? `${d.name} · 状态提升 15s` : `恢复 ${gain} 点`);
       this.pushHeal();
     } else if (this.heal.using) {
+      this.ui.setBuff(this.heal.buff.left);
       this.ui.setCenter(`${HEAL_DEFS[this.heal.using].name}\n${this.heal.left.toFixed(1)}s`);
       this.ui.setCancel(true);
     } else {
       this.ui.setHealTimer('');
+      this.ui.setBuff(this.heal.buff.left);
     }
   }
 

@@ -81,12 +81,49 @@ export function resolveHorizontal(
 }
 
 /**
- * 扫掠移动：把位移切成小段逐段推进，撞上就停，能沿墙滑行。
+ * 线段是否直接穿过某个障碍物的内部（穿模检测）。
  *
- * ★ 为什么不用"只解算终点"：那样高速移动会直接穿过障碍物
- *   （一帧从 -5 跨到 +5，终点和起点都在障碍外，中间却被穿过去了）。
- *   逐段推进保证任何速度下都不会穿模。
- *   每小步再逐轴尝试，于是顶着墙时仍能沿墙滑行，不会被彻底卡死。
+ * 只判断"圆心到线段的距离 < o.r"（不加角色半径）——
+ * 因为角色贴着墙走时本来就应该贴到 o.r + radius，
+ * 如果把 radius 也算进去，贴墙滑行会被误判成穿模而彻底卡死。
+ */
+function crossesSolid(
+  ax: number, az: number,
+  bx: number, bz: number,
+  obs: Cylinder[],
+  feetY: number,
+): boolean {
+  const sx = bx - ax;
+  const sz = bz - az;
+  const len2 = sx * sx + sz * sz;
+  if (len2 < 1e-12) return false;
+
+  for (const o of obs) {
+    if (feetY >= o.h - 0.05) continue;         // 站在顶上，不算
+    const ex = o.pos.x - ax;
+    const ez = o.pos.z - az;
+    let t = (ex * sx + ez * sz) / len2;
+    t = t < 0 ? 0 : (t > 1 ? 1 : t);
+    const px = ax + sx * t;
+    const pz = az + sz * t;
+    const d = Math.hypot(o.pos.x - px, o.pos.z - pz);
+    if (d < o.r) return true;                  // 这一步直接跨过了障碍内部
+  }
+  return false;
+}
+
+/**
+ * 扫掠移动：切成小段逐段推进，每段解算一次，能沿墙滑行。
+ *
+ * ★ 之前的实现有个严重手感 bug：贴着墙就不能侧向移动。
+ *   原因是"某个轴一旦被挡住就永久停止推进"（blockX / blockZ）。
+ *   对圆形障碍来说这是错的 —— 顶着圆走时，沿切线方向本来就该能走，
+ *   永久锁轴会把角色钉死在墙上。
+ *
+ *   现在的做法：每段直接接受【解算后的位置】。解算把角色推到圆外，
+ *   切线分量自然保留，于是能贴着墙滑行。
+ *   穿模由 crossesSolid() 单独拦：一小步若跨过障碍内部就停止推进。
+ *   因为 MAX_STEP(0.2) 远小于任何障碍直径，正常移动不会触发。
  */
 const MAX_STEP = 0.2;
 
@@ -105,28 +142,19 @@ export function sweepMove(
 
   let cx = from.x;
   let cz = from.z;
-  // ★ 一旦某个轴被挡住，本次移动就【永久】停止该轴推进。
-  //   只判断采样点是不够的：障碍另一侧的点同样是"合法"的，
-  //   否则会出现"一小步跨过障碍、后面继续前进"的穿模。
-  let blockX = false;
-  let blockZ = false;
 
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
     const tx = from.x + dx * t;
     const tz = from.z + dz * t;
 
-    if (!blockX) {
-      const ax = resolveHorizontal({ x: tx, y: to.y, z: cz }, radius, feetY, obs, bounds);
-      if (Math.abs(ax.x - tx) < 1e-6 && Math.abs(ax.z - cz) < 1e-6) cx = tx;
-      else blockX = true;                    // 撞上了，这个轴不再前进
-    }
-    if (!blockZ) {
-      const az = resolveHorizontal({ x: cx, y: to.y, z: tz }, radius, feetY, obs, bounds);
-      if (Math.abs(az.z - tz) < 1e-6 && Math.abs(az.x - cx) < 1e-6) cz = tz;
-      else blockZ = true;
-    }
-    if (blockX && blockZ) break;             // 两个方向都堵死，提前结束
+    // 这一小步会穿过障碍内部 → 停止推进（防穿模）
+    if (crossesSolid(cx, cz, tx, tz, obs, feetY)) break;
+
+    // 接受解算结果（沿墙滑行的关键）
+    const r = resolveHorizontal({ x: tx, y: to.y, z: tz }, radius, feetY, obs, bounds);
+    cx = r.x;
+    cz = r.z;
   }
 
   return { x: cx, y: to.y, z: cz };

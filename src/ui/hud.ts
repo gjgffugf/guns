@@ -41,6 +41,8 @@ export class Hud {
   private hitMark: HTMLElement;
   private flash: HTMLElement;
   private muzzle: HTMLElement;
+  /** 能量饮料剩余时间（左上角 FPS 下方） */
+  private buffTimer: HTMLElement;
 
   constructor(parent: HTMLElement, cb: HudCallbacks, _s: Settings) {
     void _s;
@@ -97,9 +99,13 @@ export class Hud {
     this.healMain.append(this.healCount);
     this.healWrap.append(this.healList, this.healArrow, this.healMain);
 
+    // 能量饮料倒计时：紧跟在左上角 FPS 下面
+    this.buffTimer = el('div', { class: 'bufftimer', text: '' });
+    show(this.buffTimer, false);
+
     this.node.append(this.stat, this.score, exit, this.cross, bottom,
       this.notice, this.feed, this.center, this.cancelBtn,
-      this.hitMark, this.flash, this.muzzle, this.healWrap);
+      this.hitMark, this.flash, this.muzzle, this.healWrap, this.buffTimer);
     parent.append(this.node);
   }
 
@@ -136,6 +142,16 @@ export class Hud {
 
   setFps(fps: number): void {
     this.stat.textContent = `FPS ${Math.round(fps)}`;
+  }
+
+  /** 能量饮料 buff 剩余秒数；<=0 时隐藏 */
+  setBuff(left: number): void {
+    if (left <= 0) {
+      show(this.buffTimer, false);
+      return;
+    }
+    show(this.buffTimer, true);
+    this.buffTimer.textContent = `冰冰冰 ${left.toFixed(1)}s`;
   }
   setScore(t: string): void { this.score.textContent = t; }
   setStance(t: string): void { this.stance.textContent = t; }

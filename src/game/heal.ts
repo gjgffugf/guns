@@ -27,7 +27,7 @@ export interface HealDef {
 }
 
 export const HEAL_DEFS: Record<HealKind, HealDef> = {
-  bandage: { kind: 'bandage', name: '破损的绷带', time: 5, heal: 40, full: false, buff: 0, capacity: 3 },
+  bandage: { kind: 'bandage', name: '破损的绷带', time: 4, heal: 70, full: false, buff: 0, capacity: 3 },
   medkit: { kind: 'medkit', name: '布满灰的急救包', time: 7, heal: 0, full: true, buff: 0, capacity: 1 },
   energy: { kind: 'energy', name: '冰冰冰', time: 4, heal: 0, full: false, buff: 15, capacity: 2 },
 };

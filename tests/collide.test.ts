@@ -19,19 +19,34 @@ const NOINPUT: PlayerInput = {
   wantCrouch: false, wantProne: false, autoSprint: false,
 };
 
-test('★ 碰撞: 走进箱子会被挡住，不会穿过去', () => {
+test('★ 碰撞: 冲向箱子不会进入箱子内部', () => {
   const w = world(BOX);
-  // 从 x=5 一路朝 +x 冲向 x=10 的箱子
+  // 起点在中央高台上（脚高 2.4 > 箱高 2.0），走下高台后才会被箱子挡。
+  // ★ 现在顶着箱子会沿墙滑行绕过去（这是刻意要的手感），
+  //   所以这里不断言"停在近侧"，只断言全程没进入箱子内部。
   let p = createPlayer(v3(5, 0, 0));
+  let minD = Infinity;
   for (let i = 0; i < 400; i++) {
     p = step(p, { ...NOINPUT, axisY: -1 }, 1 / 60, DEFAULT_TUNING, w);
-    // 朝 +x：yaw = π/2
+    p.yaw = Math.PI / 2;                    // 朝 +x
+    const d = Math.hypot(p.pos.x - 10, p.pos.z);
+    if (d < minD) minD = d;
+  }
+  assert.ok(minD >= 2.3 + R - 0.05,
+    `全程不应进入箱子内部，最近距离 ${minD.toFixed(3)}（需 ≥ ${(2.3 + R).toFixed(2)}）`);
+});
+
+test('★ 碰撞: 正面直推箱子会被挡住（不会绕过去）', () => {
+  // 平地上正对箱子中心直推：没有切向分量，应该被挡在近侧
+  const flat = { bounds: 60, obstacles: BOX, radius: R, heightAt: () => 0 };
+  let p = createPlayer(v3(5, 0, 0));
+  p.yaw = Math.PI / 2;
+  for (let i = 0; i < 400; i++) {
+    p = step(p, { ...NOINPUT, axisY: -1 }, 1 / 60, DEFAULT_TUNING, flat);
     p.yaw = Math.PI / 2;
   }
-  const d = Math.hypot(p.pos.x - 10, p.pos.z);
-  assert.ok(d >= 2.3 + R - 0.05,
-    `不应进入箱子内部，实际到圆心距离 ${d.toFixed(3)}（需 ≥ ${(2.3 + R).toFixed(2)}）`);
-  assert.ok(p.pos.x < 10, `应停在箱子近侧，实际 x=${p.pos.x.toFixed(2)}`);
+  assert.ok(p.pos.x < 10, `应被挡在箱子近侧，实际 x=${p.pos.x.toFixed(2)}`);
+  assert.ok(Math.abs(p.pos.z) < 0.6, `正面推不应侧滑太多，实际 z=${p.pos.z.toFixed(2)}`);
 });
 
 test('★ 碰撞: 走不出场外', () => {
@@ -214,4 +229,76 @@ test('人机: 巡逻时会换目标点（不是原地不动）', () => {
     seen.add(`${Math.round(bot.target.x)},${Math.round(bot.target.z)}`);
   }
   assert.ok(seen.size >= 2, `巡逻点应有变化，实际 ${seen.size} 个`);
+});
+
+// ---------------- 贴墙滑行 ----------------
+const WALL_BIG = [{ pos: v3(0, 0, 0), r: 2.0, h: 3 }];
+
+test('★ 贴墙: 顶着墙仍能沿切线方向移动', () => {
+  // 角色贴在墙的 -x 侧（x = -2.0-0.4 = -2.4），沿 z 方向走
+  const start = v3(-2.4, 0, 0);
+  const to = v3(-2.4, 0, 3);
+  const out = sweepMove(start, to, 0.4, 0, WALL_BIG, 60);
+  const moved = out.z - start.z;
+  assert.ok(moved > 2.0,
+    `贴墙应能沿 z 前进约 3m，实际只走了 ${moved.toFixed(2)}m`);
+});
+
+test('★ 贴墙: 斜着推向墙时能滑出去，不会被钉死', () => {
+  // 起点贴墙，移动方向是"往墙里 + 往旁边"
+  const start = v3(-2.4, 0, 0);
+  const to = v3(-3.5, 0, 2.5);        // x 更深入墙，z 往前
+  const out = sweepMove(start, to, 0.4, 0, WALL_BIG, 60);
+  const moved = Math.hypot(out.x - start.x, out.z - start.z);
+  assert.ok(moved > 1.0,
+    `斜顶墙应能沿墙滑行，实际位移只有 ${moved.toFixed(2)}m`);
+  assert.ok(out.z > start.z + 0.8, `z 方向应前进，实际 ${out.z.toFixed(2)}`);
+  // 且不能穿进墙里
+  const d = Math.hypot(out.x - 0, out.z - 0);
+  assert.ok(d >= 2.0 + 0.4 - 0.05, `不应进入墙体，实际距圆心 ${d.toFixed(2)}`);
+});
+
+test('贴墙: 正面直推墙会被挡住（不穿模）', () => {
+  const start = v3(-5, 0, 0);
+  const to = v3(5, 0, 0);            // 直接穿过圆心
+  const out = sweepMove(start, to, 0.4, 0, WALL_BIG, 60);
+  assert.ok(out.x < 0, `不应穿到墙的另一侧，实际 x=${out.x.toFixed(2)}`);
+  const d = Math.hypot(out.x, out.z);
+  assert.ok(d >= 2.4 - 0.05, `应停在墙外，实际距圆心 ${d.toFixed(2)}`);
+});
+
+test('贴墙: 绕着墙走一整圈都在墙外，且真能绕到背面', () => {
+  // 沿圆周逐步移动，模拟绕墙
+  let cur = v3(-2.4, 0, 0);
+  let minAng = Infinity;
+  let maxAng = -Infinity;
+  for (let i = 0; i < 60; i++) {
+    const ang = (i / 60) * Math.PI * 2;
+    const nx = Math.cos(ang) * -2.4;
+    const nz = Math.sin(ang) * -2.4;
+    cur = sweepMove(cur, v3(nx, 0, nz), 0.4, 0, WALL_BIG, 60);
+    const d = Math.hypot(cur.x, cur.z);
+    assert.ok(d >= 2.35, `第 ${i} 步进入墙体，距圆心 ${d.toFixed(2)}`);
+    const a = Math.atan2(cur.z, cur.x);
+    minAng = Math.min(minAng, a);
+    maxAng = Math.max(maxAng, a);
+  }
+  // 绕满一圈回到起点，位移接近 0 是正常的；
+  // 真正要验证的是"角度扫过了整圈" —— 说明确实贴着墙绕到了背面。
+  assert.ok(maxAng - minAng > Math.PI * 1.5,
+    `应能绕到墙的背面，实际扫过 ${(maxAng - minAng).toFixed(2)} rad`);
+});
+
+test('贴墙: 高速斜冲也不会穿模', () => {
+  const start = v3(-8, 0, -8);
+  const to = v3(8, 0, 8);            // 斜穿圆心
+  const out = sweepMove(start, to, 0.4, 0, WALL_BIG, 60);
+  const d = Math.hypot(out.x, out.z);
+  assert.ok(d >= 2.35, `高速斜冲不应进墙，实际距圆心 ${d.toFixed(2)}`);
+});
+
+test('贴墙: 站在箱子上不会被推开', () => {
+  // feetY = 3 >= h，应该可以从圆心正上方走过
+  const out = sweepMove(v3(-3, 3, 0), v3(3, 3, 0), 0.4, 3, WALL_BIG, 60);
+  assert.ok(out.x > 2.9, `站在顶上应能直穿，实际 x=${out.x.toFixed(2)}`);
 });
