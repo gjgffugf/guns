@@ -9,8 +9,12 @@
  */
 
 import * as THREE from 'three';
+import { compressForNet, imgFrom } from '../core/skin';
+import { MAX_SKIN_CHARS } from '../net/protocol';
 import { buildWorld, spawnPoints, groundHeight, ARENA, OBSTACLES } from './world';
-import { buildSoldier, animateSoldier, type Soldier } from './model';
+import {
+  buildSoldier, animateSoldier, applySkin as applySkinModel, type Soldier,
+} from './model';
 import {
   createPlayer, step, damage, EYE_HEIGHT, DEFAULT_TUNING,
   type PlayerInput, type PlayerState, type Stance,
@@ -35,7 +39,7 @@ import {
 import type { StepWorld } from './player';
 import { NetClient, toWsUrl, type NetEvents } from '../net/client';
 import type { RemoteSnapshot, StanceName } from '../net/protocol';
-import type { SessionUI } from './session';
+import { bearingTo, type SessionUI } from './session';
 
 const BODY_R = 0.42;
 
@@ -59,6 +63,10 @@ interface RemoteView {
   alive: boolean;
   /** 乐观预测：本地命中后立刻扣血，等服务器覆盖 */
   predictHp: number;
+  /** 皮肤是否已请求过（避免对同一人反复拉取） */
+  skinAsked: boolean;
+  /** 已应用的皮肤数据（空 = 默认皮肤） */
+  skinData: string;
 }
 
 export interface MultiOptions {
@@ -209,6 +217,8 @@ export class MultiSession {
         void max;
         this.settle(true);
         this.everOnline = true;
+        // ★ 进房后主动拉取已在场玩家的皮肤
+        for (const p of players) this.askSkin(this.ensureRemote(p));
         this.ui.setNotice('');
         this.ui.setTip(`已连接 · ${players.length + 1} 人在房间`);
         for (const p of players) this.ensureRemote(p);
@@ -216,6 +226,7 @@ export class MultiSession {
       onState: (players) => this.applySnapshot(players),
       onPong: (r) => { this.rtt = r; },
       onHit: (from, dmg, head) => this.takeRemoteHit(from, dmg, head),
+      onSkin: (id, data) => this.applyRemoteSkin(id, data),
       onKill: (killer, victim) => {
         this.totalKills += 1;
         if (killer === this.myId) {
@@ -244,6 +255,7 @@ export class MultiSession {
     const mesh = buildSoldier(0xdfe6f2);
     this.scene.add(mesh.root);
     const v: RemoteView = {
+      skinAsked: false, skinData: '',
       id: s.id, name: s.name, mesh,
       tx: s.x, ty: s.y, tz: s.z, tyaw: s.yaw,
       x: s.x, y: s.y, z: s.z, yaw: s.yaw,
@@ -267,6 +279,8 @@ export class MultiSession {
       v.kills = s.kills; v.deaths = s.deaths;
       v.alive = s.hp > 0;
       v.name = s.name;
+      // ★ 中途加入的玩家也要拉皮肤（welcome 只覆盖当时在场的人）
+      this.askSkin(v);
     }
     // 离开的玩家移除
     for (const id of Array.from(this.remotes.keys())) {
@@ -283,12 +297,21 @@ export class MultiSession {
   }
 
   /** 被远端打中（服务端广播） */
-  private takeRemoteHit(_from: string, dmg: number, _head: boolean): void {
-    void _from; void _head;
+  private takeRemoteHit(from: string, dmg: number, head: boolean): void {
+    void head;
     if (!this.p.alive) return;
     this.p = damage(this.p, dmg * takenMul(this.heal.buff));
     sfx.hurt();
     this.ui.onHurt();
+
+    // ★ 屏幕中间用三角指出开枪的人在哪
+    //   远端玩家的位置在快照里（插值后的显示坐标也能用，误差可忽略）
+    const v = this.remotes.get(from);
+    if (v) {
+      this.ui.onDamageFrom(
+        bearingTo(this.p.pos.x, this.p.pos.z, this.p.yaw, v.x, v.z),
+      );
+    }
     if (!this.p.alive) this.onDown();
   }
 
@@ -362,6 +385,52 @@ export class MultiSession {
     this.net.close();
     window.removeEventListener('resize', () => this.resize());
     if (this.renderer) this.renderer.dispose();
+  }
+
+  /**
+   * 应用自定义贴图（贴到自己的角色上）。
+   *
+   * ★ 多人模式的限制要说明：贴图不经过服务器同步，
+   *   所以【其他玩家看到的仍是默认皮肤】。本地换了皮肤，
+   *   别人那边不会变。要做到同步得让服务端转发贴图，超出当前范围。
+   */
+  /**
+   * 应用自定义贴图并【上传到服务器】，让房间里其他人也能看到。
+   *
+   * ★ 为什么压缩后再发：本地存档是 512px，直接转发的话
+   *   每个人加入都要拉一遍，带宽和内存都吃不消。128px 贴在
+   *   火柴人身上完全够看，体积只有十分之一。
+   */
+  applySkin(img: HTMLImageElement): void {
+    applySkinModel(this.playerSoldier, img);
+    const net = compressForNet(img);
+    if (net && net.length <= MAX_SKIN_CHARS) this.net.sendSkin(net);
+  }
+
+  /** 清除皮肤（同时通知服务器） */
+  clearSkin(): void {
+    this.net.sendSkin('');
+  }
+
+  /** 收到别人的皮肤：贴到对应角色上 */
+  private applyRemoteSkin(id: string, data: string): void {
+    const v = this.remotes.get(id);
+    if (!v) return;
+    v.skinData = data || '';
+    if (!data) return;                       // 空 = 用默认皮肤，无需处理
+    void imgFrom(data).then((im) => {
+      // ★ 异步期间玩家可能已经离开，用最新一次的数据判断
+      const cur = this.remotes.get(id);
+      if (!cur || cur.skinData !== data) return;
+      applySkinModel(cur.mesh, im);
+    }).catch(() => { /* 解码失败就用默认皮肤，不影响游戏 */ });
+  }
+
+  /** 新玩家进房时主动要一次他的皮肤 */
+  private askSkin(v: RemoteView): void {
+    if (v.skinAsked) return;
+    v.skinAsked = true;
+    this.net.requestSkin(v.id);
   }
 
   private stepWorld(): StepWorld {

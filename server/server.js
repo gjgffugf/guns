@@ -143,7 +143,7 @@ function addWsPlayer(socket, addr) {
     id, name: '玩家', kind: 'ws', conn: socket, addr,
     x: 0, y: 0, z: 0, yaw: 0, pitch: 0,
     hp: 100, stance: 'stand', kills: 0, deaths: 0,
-    last: Date.now(), dead: false,
+    last: Date.now(), dead: false, skin: '',
   };
   players.set(id, p);
   return p;
@@ -153,6 +153,26 @@ function addWsPlayer(socket, addr) {
  * 处理一条 WS 消息。语义与 UDP 分支保持一致：
  * join / state / ping / hit / leave。
  */
+// ★ 皮肤同步：转发上限（字符数）。不设限的话异常客户端能吃光带宽与内存。
+const MAX_SKIN_CHARS = 131072;
+
+/**
+ * 保存玩家皮肤并广播给房间里其他人。
+ * 自己不需要回 —— 本地已经有了。
+ */
+function setSkin(p, data) {
+  const d = data || '';
+  if (d.length > MAX_SKIN_CHARS) {
+    sendTo(p, { t: 'error', msg: '皮肤过大，已忽略' });
+    return;
+  }
+  p.skin = d;
+  for (const o of players.values()) {
+    if (o === p) continue;
+    sendTo(o, { t: 'skin', id: p.id, data: d });
+  }
+}
+
 /** 已入场（发过 join）且未离场的玩家数 */
 function countOnline() {
   return [...players.values()].filter((x) => x.joined && !x.dead).length;
@@ -166,6 +186,16 @@ function handleWsMsg(p, msg) {
       // 只统计已 join 的：WS 握手后自己已在 players 里，
       // 不加这个过滤探测者会把【自己】算进去。
       sendTo(p, { t: 'info', online: countOnline(), max: MAX_PLAYERS });
+      return;
+    }
+    case 'skin': {
+      setSkin(p, msg.data || '');
+      return;
+    }
+    case 'getskin': {
+      // ★ 按需拉取：不塞进 welcome，否则房间人一多 welcome 会很大
+      const tgt = players.get(msg.id);
+      if (tgt) sendTo(p, { t: 'skin', id: tgt.id, data: tgt.skin || '' });
       return;
     }
     case 'join': {
@@ -417,7 +447,7 @@ http.createServer((req, res) => {
     name: SERVER_NAME,
     online: countOnline(),
     max: MAX_PLAYERS,
-    version: '0.2.6',
+    version: '0.2.8',
     map: 'arena',
     udp: PORT,
     list: snapshot().map((p) => ({ name: p.name, hp: p.hp, k: p.kills, d: p.deaths })),

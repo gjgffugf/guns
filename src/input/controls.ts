@@ -1,6 +1,7 @@
 import { el } from '../ui/dom';
+import { iconEl } from '../ui/icons';
 import {
-  CONTROL_KEYS, CONTROL_NAMES, rectOf, hitTest, clampCenter, defaultControls,
+  CONTROL_KEYS, rectOf, hitTest, clampCenter, defaultControls,
   type ControlKey, type ControlCfg,
 } from '../core/layout';
 
@@ -91,15 +92,16 @@ export class TouchControls {
         continue;
       }
 
+      // ★ 全部改用图标，不再显示中文标签
       if (k === 'stick') {
-        // 摇杆做成真实图形：外圈底座 + 会跟着手指跑的摇杆头
+        // 摇杆：外圈底座 + 会跟着手指跑的摇杆头（头内嵌方向图标）
         const base = el('div', { class: 'stick-base' });
         const thumb = el('div', { class: 'stick-thumb' });
-        const label = el('div', { class: 'ctrl-label', text: CONTROL_NAMES[k] });
-        n.append(base, thumb, label);
+        thumb.append(iconEl('stick', 'thumb-icon'));
+        n.append(base, thumb);
         this.thumb = thumb;
       } else {
-        n.append(el('div', { class: 'ctrl-label', text: CONTROL_NAMES[k] }));
+        n.append(iconEl(k));
       }
       this.nodes.set(k, n);
       this.root.append(n);

@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { buildWorld, spawnPoints, groundHeight, ARENA, OBSTACLES } from './world';
-import { buildSoldier, animateSoldier, type Soldier } from './model';
+import {
+  buildSoldier, animateSoldier, applySkin as applySkinModel, type Soldier,
+} from './model';
 import {
   createPlayer, step, damage, EYE_HEIGHT, DEFAULT_TUNING,
   type PlayerInput, type PlayerState, type Stance,
@@ -27,6 +29,27 @@ import type { StepWorld } from './player';
 
 /** 单人对局：玩家 + 1 名战术人机，先到 10 分获胜，10 分钟倒计时 */
 
+/**
+ * ★ 攻击者相对玩家视角的方位角。
+ *
+ * 约定与 dirFrom 一致：yaw=0 面向 -z，yaw 增大向右转。
+ *   前方向 forward = ( sin yaw, -cos yaw )
+ *   右方向 right   = ( cos yaw,  sin yaw )
+ *
+ * 返回值：0=正前，+π/2=正右，−π/2=正左，±π=正后。
+ * 抽成纯函数便于单元测试——角度符号最容易写反。
+ */
+export function bearingTo(
+  selfX: number, selfZ: number, yaw: number,
+  srcX: number, srcZ: number,
+): number {
+  const dx = srcX - selfX;
+  const dz = srcZ - selfZ;
+  const fwd = dx * Math.sin(yaw) + dz * -Math.cos(yaw);
+  const right = dx * Math.cos(yaw) + dz * Math.sin(yaw);
+  return Math.atan2(right, fwd);
+}
+
 const WIN_SCORE = 10;
 const MATCH_TIME = 600;
 
@@ -47,6 +70,14 @@ export interface SessionUI {
   onMuzzle(): void;
   /** 受伤红闪 */
   onHurt(): void;
+  /**
+   * ★ 受击方向指示。
+   * @param angle 攻击者相对当前视角的方位角（弧度）：
+   *              0 = 正前方，+π/2 = 正右，−π/2 = 正左，±π = 正后方。
+   */
+  onDamageFrom(angle: number): void;
+  /** 收起方向指示（倒地 / 重生时清掉残留） */
+  hideDamageFrom(): void;
   /** 治疗物状态变化 */
   onHealChange(h: HealState): void;
   /** 使用中的倒计时文本；空表示隐藏 */
@@ -155,6 +186,8 @@ export class SoloSession {
     for (let i = 0; i < 1; i++) {
       const b = createBot(`战术兵${i + 1}`, safeSpawn(pts, OBSTACLES, BODY_R));
       const m = buildSoldier(0xe8e4dc);
+      // 换过皮肤后再建的人机也要跟上，否则会出现"有的穿了有的没穿"
+      if (this.skinImg) applySkinModel(m, this.skinImg);
       this.scene.add(m.root);
       const id = `bot${i}`;
       this.bots.set(id, b);
@@ -436,6 +469,11 @@ export class SoloSession {
         this.p = damage(this.p, 9 * takenMul(this.heal.buff));
         sfx.hurt();
         this.ui.onHurt();
+        // ★ 屏幕中间用三角指出敌人方位
+        this.ui.onDamageFrom(
+          bearingTo(this.p.pos.x, this.p.pos.z, this.p.yaw,
+            r.bot.state.pos.x, r.bot.state.pos.z),
+        );
         if (!this.p.alive) this.onPlayerDown();
       }
       this.bots.set(id, r.bot);
@@ -559,6 +597,7 @@ export class SoloSession {
   private onPlayerDown(): void {
     this.respawnLeft = 3;
     this.scoreEnemy += 1;
+    this.ui.hideDamageFrom();      // 倒地后不该还挂着方向指示
     this.ui.pushKill('你被击倒了');
     this.ui.setCenter('');
   }
@@ -596,10 +635,22 @@ export class SoloSession {
     if (this.renderer) this.renderer.render(this.scene, this.camera);
   }
 
-  /** 提供给外部：应用自定义贴图 */
+  /**
+   * 应用自定义贴图。
+   *
+   * ★ 之前这里只有 `void img;`，是个空壳 —— 功能完全没接上。
+   *
+   * 同时贴给【自己】和【人机】：第一人称看不到自己，
+   * 只贴自己的话单机模式里根本看不出效果，玩家会以为没生效。
+   */
   applySkin(img: HTMLImageElement): void {
-    void img;
+    this.skinImg = img;
+    applySkinModel(this.playerSoldier, img);
+    for (const m of this.botMeshes.values()) applySkinModel(m, img);
   }
+
+  /** 已应用的皮肤（新建人机时补贴，避免后加的人机还是默认色） */
+  private skinImg: HTMLImageElement | null = null;
 
   get eyeHeight(): number { return EYE_HEIGHT[this.p.stance]; }
   get playerPos(): V3 { return this.p.pos; }

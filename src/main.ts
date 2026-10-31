@@ -11,6 +11,10 @@ import { MultiSession } from './game/multi';
 import { ServerPanel, type SavedServer } from './ui/menu';
 import { loadServers, saveServers } from './core/storage';
 import { queryServer, diagnose, probeServer } from './net/client';
+import {
+  loadSkinData, saveSkinData, clearSkinData,
+  skinFromFile, skinFromDataUrl,
+} from './core/skin';
 import { HEAL_DEFS, type HealState } from './game/heal';
 import { load, save, defaultSettings, type Settings } from './core/settings';
 import { sfx } from './core/sfx';
@@ -73,10 +77,68 @@ const settingsPanel = new SettingsPanel(app, settings, {
   refreshHz: () => detectRefreshHz(),
 });
 
+/** 当前自定义皮肤（新开的对局会自动套用） */
+let skinImg: HTMLImageElement | null = null;
+/** 启动时是否已尝试恢复存档里的皮肤 */
+let skinLoaded = false;
+
 let hud: Hud | null = null;
 let session: SoloSession | MultiSession | null = null;
 let serversPanel: ServerPanel | null = null;
 let controls: TouchControls | null = null;
+
+/** 把皮肤套到当前对局上（没有则忽略） */
+function applySkinTo(img: HTMLImageElement | null): void {
+  if (img) session?.applySkin(img);
+}
+
+/** 启动时恢复上次选的皮肤 */
+async function restoreSkin(): Promise<void> {
+  if (skinLoaded) return;
+  skinLoaded = true;
+  const data = loadSkinData();
+  if (!data) return;
+  try {
+    skinImg = await skinFromDataUrl(data);
+    applySkinTo(skinImg);
+  } catch {
+    skinImg = null;      // 存档坏了就当没设过，不要卡住启动
+  }
+}
+
+/** 打开文件选择器选一张图当皮肤 */
+function pickSkin(): void {
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = 'image/*';
+  inp.style.display = 'none';
+  document.body.append(inp);
+  inp.addEventListener('change', () => {
+    const f = inp.files && inp.files[0];
+    inp.remove();
+    if (!f) return;
+    void skinFromFile(f).then(({ img, dataUrl }) => {
+      skinImg = img;
+      applySkinTo(img);
+      if (!saveSkinData(dataUrl)) {
+        menu.toast('皮肤已应用，但保存失败（重启后会恢复默认）');
+      } else {
+        menu.toast('皮肤已应用');
+      }
+    }).catch((e: Error) => {
+      menu.toast(`图片读取失败：${e.message}`);
+    });
+  });
+  inp.click();
+}
+
+function clearSkin(): void {
+  skinImg = null;
+  clearSkinData();
+  // ★ 联机中要通知服务器，否则别人那边还挂着旧皮肤
+  if (session instanceof MultiSession) session.clearSkin();
+  menu.toast('已恢复默认皮肤（重新开局生效）');
+}
 
 function applySettings(): void {
   sfx.setVolume(settings.masterVolume);
@@ -124,6 +186,8 @@ function openServers(): void {
       },
       async (sv) => diagnose(sv.host, sv.port),
       async (sv) => probeServer(sv.host, sv.port),
+      () => pickSkin(),
+      () => clearSkin(),
       () => { /* 返回主菜单 */ },
     );
   }
@@ -174,6 +238,8 @@ async function startMulti(sv: SavedServer): Promise<void> {
     }
 
     session.start();
+    applySkinTo(skinImg);
+    void restoreSkin();
     bindControls();
     syncHeal(session.healState);
     loading.setProgress(1);
@@ -203,6 +269,8 @@ function makeSessionUI(): import('./game/session').SessionUI {
     onHit: (head) => hud?.showHit(head),
     onMuzzle: () => hud?.flashMuzzle(),
     onHurt: () => hud?.flashHurt(),
+    onDamageFrom: (a) => hud?.showDamageFrom(a),
+    hideDamageFrom: () => hud?.hideDamageFrom(),
     onHealChange: (h) => syncHeal(h),
     setHealTimer: () => { /* 倒计时走 setCenter */ },
     setBuff: (left) => hud?.setBuff(left),
@@ -242,6 +310,8 @@ async function startSolo(): Promise<void> {
     onHit: (head) => hud?.showHit(head),
     onMuzzle: () => hud?.flashMuzzle(),
     onHurt: () => hud?.flashHurt(),
+    onDamageFrom: (a) => hud?.showDamageFrom(a),
+    hideDamageFrom: () => hud?.hideDamageFrom(),
     onHealChange: (h) => syncHeal(h),
     setHealTimer: () => { /* 倒计时走 setCenter */ },
     setBuff: (left) => hud?.setBuff(left),
@@ -256,6 +326,8 @@ async function startSolo(): Promise<void> {
   hud.drawCrosshair(settings);
   hud.layoutHeal(settings.controls.heal);
   session.start();
+  applySkinTo(skinImg);
+  void restoreSkin();
   bindControls();
   syncHeal(session.healState);
   } catch (err) {
@@ -382,5 +454,7 @@ interface DebugHook { session: SoloSession | MultiSession | null }
 (window as unknown as { __bb?: DebugHook }).__bb = {
   get session(): SoloSession | MultiSession | null { return session; },
 };
+// 便于自动化验证 HUD 反馈（受击方向指示等）
+(window as unknown as { __bbHud?: () => Hud | null }).__bbHud = () => hud;
 
 void defaultSettings;

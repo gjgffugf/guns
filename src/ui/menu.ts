@@ -45,6 +45,8 @@ export class ServerPanel {
     private onQuery: (s: SavedServer) => Promise<{ online: number; max: number; rtt: number } | null>,
     private onDiag: (s: SavedServer) => Promise<DiagResult | null>,
     private onProbe: (s: SavedServer) => Promise<{ online: number; max: number; rtt: number } | null>,
+    private onSkin: () => void,
+    private onSkinClear: () => void,
     onClose: () => void,
   ) {
     this.node = el('div', { class: 'layer hidden', id: 'servers' });
@@ -56,8 +58,15 @@ export class ServerPanel {
     this.actEl = el('div', { class: 'srvact' });
     this.diagEl = el('pre', { class: 'diag', text: '' });
 
+    // ★ 自定义皮肤：放在多人房间（服务器列表）下方
+    const skinRow = el('div', { class: 'srvact skinrow' });
+    skinRow.append(
+      btn('自定义皮肤', 'btn', () => this.onSkin()),
+      btn('恢复默认', 'btn', () => this.onSkinClear()),
+    );
+
     const close = btn('返回', 'btn', () => { this.hide(); onClose(); });
-    panel.append(this.listEl, this.formEl, this.actEl, this.diagEl, close);
+    panel.append(this.listEl, this.formEl, this.actEl, this.diagEl, skinRow, close);
     // 全屏铺满（见 style.css）
     panel.classList.add('full');
     this.node.append(panel);
@@ -210,7 +219,7 @@ export class MainMenu {
     left.append(
       el('div', { class: 'title', text: '破绷战场' }),
       el('div', { class: 'sub', text: 'B R E A K B I N D   B A T T L E F I E L D' }),
-      el('div', { class: 'foot', text: 'xfan.games.gun   v0.2.6' }),
+      el('div', { class: 'foot', text: 'xfan.games.gun   v0.2.8' }),
     );
 
     const right = el('div', { class: 'right' });

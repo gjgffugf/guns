@@ -263,7 +263,25 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   -webkit-user-select: none;
 }
 #touch .ctrl.active { background: rgba(120,140,190,.6); border-color: rgba(255,255,255,.85); }
-#touch .ctrl-label { pointer-events: none; text-align: center; line-height: 1.05; padding: 2px; }
+/* ★ 控件图标：取代原来的中文标签 */
+#touch .ctrl .icon {
+  position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: 58%; height: 58%;
+  color: rgba(255,255,255,.94);
+  pointer-events: none;
+}
+#touch .ctrl .icon svg { width: 100%; height: 100%; display: block; }
+/* 按压时图标提亮，给出即时反馈 */
+#touch .ctrl.active .icon { color: #fff; }
+/* 摇杆头里的小方向图标（深色，与白色摇杆头对比） */
+#touch .stick-thumb .thumb-icon {
+  position: absolute; left: 15%; top: 15%;
+  width: 70%; height: 70%;
+  color: rgba(38,48,68,.8);
+  pointer-events: none;
+}
+#touch .stick-thumb .thumb-icon svg { width: 100%; height: 100%; display: block; }
 #touch .ctrl.fire { border-color: rgba(255,120,110,.7); background: rgba(120,26,26,.4); }
 #touch .ctrl.heal { border-color: rgba(110,220,150,.7); background: rgba(20,90,50,.4); }
 
@@ -284,6 +302,30 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   /* ★ 不要给 left/top 加过渡：手指一动就拖影，手感像"不跟手"。
      松手归位才需要动画，由 .stick-thumb.active 之外的回弹类处理。 */
   will-change: left, top;
+}
+
+/* ★ 受击方向指示：容器是中心一个点，三角挂在上方，靠旋转指向敌人 */
+#hud .dmgdir {
+  position: absolute; left: 50%; top: 50%;
+  width: 0; height: 0;
+  pointer-events: none;
+  transform-origin: 0 0;
+  transition: transform .08s linear;
+}
+#hud .dmgdir i {
+  position: absolute;
+  left: -20px; top: -152px;
+  width: 0; height: 0;
+  border-left: 20px solid transparent;
+  border-right: 20px solid transparent;
+  border-bottom: 34px solid rgba(255,64,54,.95);
+  filter: drop-shadow(0 0 8px rgba(0,0,0,.85));
+  animation: dmgpulse .5s ease-out;
+}
+@keyframes dmgpulse {
+  0%   { transform: scale(.6); opacity: 0; }
+  40%  { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
 }
 
 /* ---------------- 射击 / 受击反馈 ---------------- */
@@ -459,6 +501,10 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   background: rgba(0,0,0,.35); color: #e9eef8; font-size: 15px;
 }
 #servers .srvact { display: flex; gap: 8px; flex-wrap: wrap; }
+#servers .skinrow {
+  margin-top: auto; padding-top: 10px;
+  border-top: 1px solid rgba(255,255,255,.14);
+}
 #servers .btn.danger { border-color: rgba(255,120,110,.8); background: rgba(120,26,26,.9); }
 
 #servers .diag {

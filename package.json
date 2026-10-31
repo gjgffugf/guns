@@ -1,7 +1,7 @@
 {
   "name": "breakbind-battlefield",
   "private": true,
-  "version": "0.2.6",
+  "version": "0.2.8",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,10 +9,13 @@
     "typecheck": "node tools/compile.cjs check",
     "check:yaml": "node tools/check-yaml.cjs",
     "test": "node tools/compile.cjs build && node --test build/tests/",
-    "verify": "npm run check:yaml && npm run typecheck && npm run test && npm run build && npm run verify:server && npm run verify:browser",
+    "verify": "npm run check:yaml && npm run typecheck && npm run test && npm run build && npm run verify:server && npm run verify:server:py && npm run verify:server:js && npm run verify:e2e && npm run verify:browser",
     "sync": "vite build && npx cap sync android",
     "verify:browser": "vite build --minify false --outDir dist-debug && node tools/browser-check.cjs",
-    "verify:server": "node server/test.js"
+    "verify:server": "node server/test.js",
+    "verify:server:py": "python3 server/test_ws.py",
+    "verify:server:js": "BB_TEST_PORT=19680 BB_SERVER_CMD=\"node server.js\" python3 server/test_ws.py",
+    "verify:e2e": "python3 server/test_e2e.py"
   },
   "dependencies": {
     "three": "^0.169.0",

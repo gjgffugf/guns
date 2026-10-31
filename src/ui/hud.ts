@@ -39,6 +39,8 @@ export class Hud {
   private healList: HTMLElement;
   private healCount: HTMLElement;
   private hitMark: HTMLElement;
+  private dmgDir: HTMLElement;
+  private dmgTimer = 0;
   private flash: HTMLElement;
   private muzzle: HTMLElement;
   /** 能量饮料剩余时间（左上角 FPS 下方） */
@@ -78,6 +80,12 @@ export class Hud {
     this.cancelBtn = btn('取消', 'cancel', () => { /* 由外部绑定 */ });
     show(this.cancelBtn, false);
 
+    // ---- ★ 受击方向指示：中心圆环上的三角，指向开枪的人 ----
+    //   只有被击中时才出现，1.2 秒后自动消失。
+    this.dmgDir = el('div', { class: 'dmgdir' });
+    this.dmgDir.append(el('i'));
+    show(this.dmgDir, false);
+
     // ---- 射击反馈层 ----
     this.hitMark = el('div', { class: 'hitmark' });
     show(this.hitMark, false);
@@ -105,12 +113,36 @@ export class Hud {
 
     this.node.append(this.stat, this.score, exit, this.cross, bottom,
       this.notice, this.feed, this.center, this.cancelBtn,
-      this.hitMark, this.flash, this.muzzle, this.healWrap, this.buffTimer);
+      this.dmgDir, this.hitMark, this.flash, this.muzzle, this.healWrap, this.buffTimer);
     parent.append(this.node);
   }
 
   // ---------------- 射击 / 受击反馈 ----------------
   /** 命中标记（爆头为红色） */
+  /**
+   * ★ 被击中时，在屏幕中间用一个三角指出敌人方位。
+   *
+   * @param angle 弧度：0=正前，+π/2=正右，−π/2=正左，±π=正后。
+   *
+   * 实现要点：外层容器宽高为 0 且定位在正中心，
+   * 三角用绝对定位放在"上方"，靠旋转容器把它转到对应方位 ——
+   * 这样三角永远绕屏幕中心转，不需要三角函数去算 x/y。
+   */
+  showDamageFrom(angle: number): void {
+    const deg = angle * 180 / Math.PI;
+    this.dmgDir.style.transform = `rotate(${deg.toFixed(1)}deg)`;
+    show(this.dmgDir, true);
+    if (this.dmgTimer) window.clearTimeout(this.dmgTimer);
+    this.dmgTimer = window.setTimeout(() => show(this.dmgDir, false), 1200);
+  }
+
+  /** 立刻收起方向指示（倒地 / 退出时清掉残留） */
+  hideDamageFrom(): void {
+    if (this.dmgTimer) window.clearTimeout(this.dmgTimer);
+    this.dmgTimer = 0;
+    show(this.dmgDir, false);
+  }
+
   showHit(head: boolean): void {
     this.hitMark.classList.toggle('head', head);
     show(this.hitMark, true);

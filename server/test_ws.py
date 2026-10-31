@@ -203,6 +203,72 @@ def main():
             ok(killmsg.get("victim") == ida and killmsg.get("killer") == idb,
                "kill 里的凶手与受害者正确")
 
+        # 7.5) ★ 皮肤转发：甲上传 -> 乙收到；丙中途进场 -> 能拉到
+        SKIN = "data:image/jpeg;base64," + "A" * 3000
+        a.send({"t": "skin", "data": SKIN})
+        got_skin = None
+        for _ in range(30):
+            m = b.recv(1.0)
+            if m and m.get("t") == "skin":
+                got_skin = m
+                break
+        ok(got_skin is not None, "★ 甲上传皮肤后乙收到广播", str(got_skin)[:60])
+        if got_skin:
+            ok(got_skin.get("id") == ida, "★ 广播里带的是甲的 id", got_skin.get("id"))
+            ok(got_skin.get("data") == SKIN, "★ 皮肤数据完整（未被截断）",
+               "长度 %d" % len(got_skin.get("data") or ""))
+
+        # 大包也要完整：验证服务端帧编码支持 >64KB
+        BIG = "data:image/jpeg;base64," + "B" * 90000
+        a.send({"t": "skin", "data": BIG})
+        big_ok = False
+        for _ in range(40):
+            m = b.recv(1.5)
+            if m and m.get("t") == "skin" and len(m.get("data") or "") == len(BIG):
+                big_ok = True
+                break
+        ok(big_ok, "★ 大皮肤（90KB）也能完整转发（帧编码支持长负载）")
+
+        # 超限应被拒绝
+        HUGE = "data:image/jpeg;base64," + "C" * 200000
+        a.send({"t": "skin", "data": HUGE})
+        rejected = False
+        for _ in range(20):
+            m = a.recv(1.0)
+            if m and m.get("t") == "error":
+                rejected = True
+                break
+        ok(rejected, "★ 超大皮肤被拒绝（不会拖垮房间）")
+
+        # 丙中途进场，主动拉甲的皮肤
+        c = WS(port=PORT)
+        c.send({"t": "join", "name": "丙"})
+        wc = None
+        for _ in range(30):
+            m = c.recv(1.0)
+            if m and m.get("t") == "welcome":
+                wc = m
+                break
+        ok(wc is not None, "★ 丙成功加入")
+        c.send({"t": "getskin", "id": ida})
+        pulled = None
+        for _ in range(30):
+            m = c.recv(1.0)
+            if m and m.get("t") == "skin" and m.get("id") == ida:
+                pulled = m
+                break
+        ok(pulled is not None, "★ 丙能主动拉取甲的皮肤", str(pulled)[:60])
+        if pulled:
+            # 最后成功设置的是 BIG（HUGE 被拒），所以拉到的应是 BIG
+            ok(len(pulled.get("data") or "") == len(BIG),
+               "★ 拉到的是最新一份皮肤", "长度 %d" % len(pulled.get("data") or ""))
+
+        # 查询不存在的玩家：不应崩溃，也不应回消息
+        c.send({"t": "getskin", "id": "不存在的人"})
+        time.sleep(0.3)
+        c.close()
+        time.sleep(0.3)
+
         # 8) 在线人数
         info2 = http_info()
         ok(info2 is not None and info2.get("online") == 2,

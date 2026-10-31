@@ -30,6 +30,8 @@ export interface NetEvents {
   onPong: (rtt: number) => void;
   onHit: (from: string, damage: number, head: boolean) => void;
   onKill: (killer: string, victim: string) => void;
+  /** 收到某个玩家的皮肤（data 为空 = 该玩家用默认皮肤） */
+  onSkin: (id: string, data: string) => void;
 }
 
 /**
@@ -371,12 +373,26 @@ export class NetClient {
       case 'kill':
         this.ev.onKill(m.killer, m.victim);
         break;
+      case 'skin':
+        this.ev.onSkin(m.id, m.data);
+        break;
       case 'error':
         this.setStatus('error', m.msg);
         break;
       default:
         break;
     }
+  }
+
+  /** 上传自己的皮肤（data 为空表示清除） */
+  sendSkin(data: string): void {
+    this.send({ t: 'skin', data });
+  }
+
+  /** 拉取某个玩家的皮肤 */
+  requestSkin(id: string): void {
+    if (!id) return;
+    this.send({ t: 'getskin', id });
   }
 
   private rawSend(m: ClientMsg): void {

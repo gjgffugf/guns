@@ -115,6 +115,16 @@ const ok = (c, name, extra = '') => {
     ok(persisted >= 2, '★ 可添加多个服务器且重启后仍在', `${persisted} 个`);
   }
 
+  // ---- 3.6) 自定义皮肤入口（多人房间下方） ----
+  const skinBtns = await page.evaluate(() => {
+    const bs = [...document.querySelectorAll('#servers .skinrow .btn')];
+    return bs.map((b) => b.textContent);
+  });
+  ok(skinBtns.some((t) => t.includes('自定义皮肤')),
+    '★ 服务器列表下方有自定义皮肤按钮', skinBtns.join(' / '));
+  ok(skinBtns.some((t) => t.includes('恢复默认')),
+    '★ 还有恢复默认按钮', skinBtns.join(' / '));
+
   await page.evaluate(() => {
     const b = [...document.querySelectorAll('#servers .btn')].find((x) => x.textContent === '返回');
     if (b) b.click();
@@ -284,6 +294,64 @@ const ok = (c, name, extra = '') => {
   await page.waitForTimeout(300);
 
   await page.screenshot({ path: '/tmp/bb-menu.png' });
+
+  // ---- 6.9) 控件已图标化（不再显示文字） ----
+  await page.evaluate(() => {
+    const b = [...document.querySelectorAll('#menu .mode')]
+      .find((x) => x.textContent.includes('单'));
+    if (b) b.click();
+  });
+  await page.waitForTimeout(1200);
+
+  const iconInfo = await page.evaluate(() => {
+    const ctrls = [...document.querySelectorAll('#touch .ctrl')];
+    const cjk = /[\u4e00-\u9fa5]/;
+    const withIcon = ctrls.filter((c) => c.querySelector('.icon svg, .thumb-icon svg')).length;
+    // 除 heal（透明命中层，视觉由 HUD 画）外，都不应残留中文文字
+    const withText = ctrls.filter(
+      (c) => !c.classList.contains('heal') && cjk.test(c.textContent || ''),
+    ).map((c) => c.className);
+    return { total: ctrls.length, withIcon, withText };
+  });
+  ok(iconInfo.withIcon >= 8, '★ 控件已改用图标',
+    `${iconInfo.withIcon}/${iconInfo.total} 个含 SVG`);
+  ok(iconInfo.withText.length === 0, '★ 控件上不再有中文文字',
+    iconInfo.withText.join(',') || '无残留');
+
+  // ---- 6.10) 受击方向指示 ----
+  const dmg = await page.evaluate(async () => {
+    const h = window.__bbHud && window.__bbHud();
+    if (!h) return null;
+    // ★ 先强制收起：进入单人后人机可能已经开过火，
+    //   指示器正好亮着，直接测"初始状态"会得到假失败。
+    h.hideDamageFrom();
+    await new Promise((r) => setTimeout(r, 80));
+    const el0 = document.querySelector('#hud .dmgdir');
+    const before = el0 ? getComputedStyle(el0).display : null;
+    h.showDamageFrom(Math.PI / 2);          // 正右方
+    await new Promise((r) => setTimeout(r, 150));
+    const e = document.querySelector('#hud .dmgdir');
+    return {
+      before,
+      after: e ? getComputedStyle(e).display : null,
+      transform: e ? e.style.transform : '',
+    };
+  });
+  if (dmg) {
+    // ★ 元素找不到时 before/after 都是 null —— 必须显式判掉，
+    //   否则 `null !== 'none'` 会让这条假通过，掩盖"根本没挂上"的问题。
+    ok(dmg.before === 'none', '★ 未受伤时不显示方向指示', String(dmg.before));
+    ok(dmg.after === 'block' || (dmg.after && dmg.after !== 'none'),
+      '★ 被击中后显示方向指示', String(dmg.after));
+    ok(/rotate\(9[0-9]/.test(dmg.transform),
+      '★ 三角指向右侧（90°）', dmg.transform);
+  }
+
+  await page.evaluate(() => {
+    const b = document.querySelector('#hud .exit');
+    if (b) b.click();
+  });
+  await page.waitForTimeout(600);
 
   // ---- 7) 进入单人游戏 ----
   await modes.first().click();

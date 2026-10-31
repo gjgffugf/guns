@@ -132,6 +132,29 @@ def handle_hit(src, msg, out):
         print("[kill] %s -> %s" % (src["name"], tgt["name"]))
 
 
+# ★ 皮肤同步：转发用的上限（字符数）。
+#   贴图是 base64 文本，不设上限的话一个异常客户端就能吃光带宽与内存。
+MAX_SKIN_CHARS = 131072
+
+
+def set_skin(p, data):
+    """
+    保存玩家皮肤，并广播给房间里其他人。
+    自己不需要回 —— 本地已经有了。
+    """
+    out = []
+    data = data or ""
+    if len(data) > MAX_SKIN_CHARS:
+        out.append((None, {"t": "error", "msg": "皮肤过大，已忽略"}))
+        return out
+    p["skin"] = data
+    for o in list(players.values()):
+        if o is p:
+            continue
+        out.append((o["id"], {"t": "skin", "id": p["id"], "data": data}))
+    return out
+
+
 # 已入场（发过 join）且未离场的玩家数
 def count_online():
     return len([x for x in players.values() if x.get("joined") and not x.get("dead")])
@@ -144,7 +167,18 @@ def process(p, msg):
     """
     out = []            # [(target_id, msg)]，target_id=None 表示只回给自己
     t = msg.get("t")
-    if t == "query":
+    if t == "skin":
+        out += set_skin(p, msg.get("data") or "")
+    elif t == "getskin":
+        # ★ 按需拉取：不塞进 welcome，否则房间人一多 welcome 会变得很大。
+        #   新玩家进场时再逐个问，代价小得多。
+        tid = msg.get("id")
+        tgt = players.get(tid)
+        if tgt is not None:
+            out.append((None, {
+                "t": "skin", "id": tid, "data": tgt.get("skin") or "",
+            }))
+    elif t == "query":
         # ★ 只查状态，不建号：客户端在游戏外测延迟/人数用。
         #   走 join 会真的占一个位置并在房间里闪现一个幽灵玩家。
         #
@@ -321,7 +355,7 @@ def ws_thread(conn, addr):
             "id": pid, "name": "玩家", "kind": "ws", "conn": conn, "addr": addr,
             "x": 0.0, "y": 0.0, "z": 0.0, "yaw": 0.0, "pitch": 0.0,
             "hp": 100, "stance": "stand", "kills": 0, "deaths": 0,
-            "last": time.time(), "dead": False,
+            "last": time.time(), "dead": False, "skin": "",
         }
         p = players[pid]
 
@@ -401,7 +435,7 @@ def udp_server():
                     "id": pid, "name": "玩家", "kind": "udp", "conn": None, "addr": addr,
                     "x": 0.0, "y": 0.0, "z": 0.0, "yaw": 0.0, "pitch": 0.0,
                     "hp": 100, "stance": "stand", "kills": 0, "deaths": 0,
-                    "last": time.time(), "dead": False,
+                    "last": time.time(), "dead": False, "skin": "",
                 }
                 players[pid] = p
             p["addr"] = addr
@@ -441,7 +475,7 @@ def http_thread(conn):
         if path.startswith("/info"):
             body = json.dumps({
                 "name": SERVER_NAME, "online": count_online(), "max": MAX_PLAYERS,
-                "version": "0.2.6", "map": "arena",
+                "version": "0.2.8", "map": "arena",
             }).encode("utf-8")
             head = (
                 "HTTP/1.1 200 OK\r\n"
